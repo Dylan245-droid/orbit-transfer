@@ -4,17 +4,18 @@
 [![Docker](https://img.shields.io/docker/v/dylanondo/orbit-relay?label=docker)](https://hub.docker.com/r/dylanondo/orbit-relay)
 [![GitHub](https://img.shields.io/github/v/release/Dylan245-droid/orbit-transfer)](https://github.com/Dylan245-droid/orbit-transfer)
 
-**Live demo**: [WebRTC share-link transfer (full, automated signaling)](https://orbit-transfer-theta.vercel.app/webrtc/) ·
-[fountain codec in the browser](https://dylan245-droid.github.io/orbit-transfer/demo/) ·
-[WebRTC (static fallback, manual SDP)](https://dylan245-droid.github.io/orbit-transfer/webrtc/)
+**Try it live — no install, in your browser:**
+[**WebRTC share-link transfer**](https://orbit-transfer-theta.vercel.app/webrtc/) ·
+[**Fountain codec demo**](https://dylan245-droid.github.io/orbit-transfer/demo/)
 
-> The Vercel demo (`orbit-transfer-theta.vercel.app`) runs the automated
-> signaling room (`/api/rooms`) so two peers can transfer over a shareable
-> `?room=<id>` link. The GitHub Pages copy is fully static — the signaling
-> API is unavailable there, so it falls back to manual SDP (great for a
-> two-tab, same-machine demo).
+> Drag & drop a file, share a `?room=` link, and the receiver downloads it P2P
+> over WebRTC while the simulated-loss slider is at 40% — still ~1× overhead.
+> On the static GitHub Pages copy, signaling falls back to manual SDP (great
+> for a two-tab, same-machine demo).
 
-Hybrid P2P + edge-relay file transfer with **rateless fountain codes** (LT + LDPC + HDPC).
+![Multi-relay bandwidth aggregation: 3 relays = 2.84× a single throttled path](bench/chart.svg)
+
+**Hybrid P2P + edge-relay file transfer with rateless fountain codes (LT + LDPC + HDPC).**
 
 Orbit-Transfer splits a file into K source blocks, adds S LDPC and H HDPC
 precode checks, and emits an *unbounded* stream of encoded symbols. The receiver
