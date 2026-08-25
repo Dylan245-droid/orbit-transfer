@@ -394,6 +394,10 @@ export class GuestSession {
     this.dropped = 0;
     this.fed = 0;
     this.pending = [];
+    // "Transfer start": when the receiver session was created (joined the
+    // room / accepted the offer). Elapsed = join -> decoded.
+    this.startedAt = performance.now();
+    this.complete = false;
   }
 
   /** Sets the offer SDP from the host and creates the answer. */
@@ -477,11 +481,14 @@ export class GuestSession {
       if (this.fed % 200 === 0) {
         this.opts.onLog(`fed ${this.fed} (distinct ${this.decoder.received()}) need ~${this.meta.k}`);
       }
-      if (complete) {
-        this.opts.onLog(`decoded at ${this.fed} symbols fed (distinct ${this.decoder.received()}, overhead x${(this.fed / this.meta.k).toFixed(3)})`);
+      if (complete && !this.complete) {
+        this.complete = true;
         const payload = this.decoder.reconstruct();
         const ok = payload.length === this.meta.payloadLength;
-        this.opts.onResult({ payload, ok, meta: this.meta, received: this.received, dropped: this.dropped, fed: this.fed });
+        const elapsed = (performance.now() - this.startedAt) / 1000;
+        const mbps = payload.length / 1048576 / elapsed;
+        this.opts.onLog(`decoded at ${this.fed} symbols fed (distinct ${this.decoder.received()}, overhead x${(this.fed / this.meta.k).toFixed(3)})`);
+        this.opts.onResult({ payload, ok, meta: this.meta, received: this.received, dropped: this.dropped, fed: this.fed, elapsed, mbps });
         const done = new Uint8Array([FRAME_DONE]);
         this.channel?.send(done);
       }

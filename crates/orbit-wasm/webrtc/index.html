@@ -110,13 +110,15 @@ function line(msg) {
   log.scrollTop = log.scrollHeight;
 }
 
-function showResult(meta, payload, ok, received, dropped, fed) {
+function showResult(meta, payload, ok, received, dropped, fed, elapsed, mbps) {
   $("result").hidden = false;
   $("resultText").textContent =
     `filename:    ${meta.filename}\n` +
     `payload:     ${meta.payloadLength.toLocaleString()} B (K=${meta.k})\n` +
     `received:    ${received} symbols (dropped ${dropped} simulated)\n` +
     `fed:         ${fed} (overhead x${(fed / meta.k).toFixed(3)})\n` +
+    `time:        ${(elapsed ?? 0).toFixed(1)} s (from join to decoded)\n` +
+    `throughput:  ${(mbps ?? 0).toFixed(2)} MiB/s average\n` +
     `decoded:     ${payload.length.toLocaleString()} B — ${ok ? "payload matches (XXH3 + byte compare)" : "MISMATCH"}`;
 
   // Give the receiver the actual file back + a preview when the type allows.
@@ -278,8 +280,8 @@ if (roomParam) {
         loss: s.loss,
         loopback: s.loopback,
         onLog: line,
-        onResult: ({ payload, ok, meta, received, dropped, fed }) =>
-          showResult(meta, payload, ok, received, dropped, fed),
+        onResult: ({ payload, ok, meta, received, dropped, fed, elapsed, mbps }) =>
+          showResult(meta, payload, ok, received, dropped, fed, elapsed, mbps),
       });
       $("guestStatus").textContent = "connected — decoding…";
     } catch (e) { line("guest error: " + e); $("startGuest").disabled = false; }
