@@ -1,0 +1,466 @@
+% Orbit-Transfer — version française (traduction personnelle de paper.tex)
+% Compilation: pdflatex paper-fr.tex (deux passages suffisent).
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+\usepackage{cite}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{textcomp}
+\usepackage{booktabs}
+\usepackage{url}
+\usepackage{xcolor}
+\usepackage[french]{babel}
+\frenchbsetup{StandardLists=true}
+
+% Étiquettes IEEEtran en français (résumé et mots-clés)
+\providecommand{\IEEEabstractname}{Abstract}
+\providecommand{\IEEEkeywordsname}{Index Terms}
+\renewcommand{\IEEEabstractname}{Résumé}
+\renewcommand{\IEEEkeywordsname}{Mots-clés}
+
+\hyphenation{op-tical net-works semi-conduc-tor}
+
+\begin{document}
+
+\title{Orbit-Transfer : agrégation de bande passante\\ multi-relais avec codes fontaines rateless}
+
+\author{\IEEEauthorblockN{Dylan Ondo}
+\IEEEauthorblockA{\textit{Chercheur indépendant} \\
+Libreville, Gabon \\
+Email : danielebang59@gmail.com}}
+
+\maketitle
+
+\begin{abstract}
+Ce papier présente Orbit-Transfer, un système de transfert de fichiers hybride
+pair-à-pair et relais périphériques qui agrège la capacité de plusieurs chemins
+réseau contraints à l'aide de codes fontaines rateless. Une charge utile est
+découpée en $K$ symboles source, augmentés de $S$ symboles de contrôle de
+précodage LDPC, et l'émetteur produit un flux illimité de symboles encodés ; le
+récepteur reconstruit la charge utile à partir de n'importe quels
+$K+\varepsilon$ symboles distincts, sans demande de retransmission. Comme les
+symboles de fontaine sont interchangeables et indépendants de l'ordre,
+l'émetteur peut les répartir en tourniquet sur $N$ relais---et un canal
+pair-à-pair direct optionnel---si bien que le débit agrégé est la somme des
+chemins actifs. Nous évaluons la conception sur un banc d'essai multi-relais où
+chaque relais est limité en débit par un régulateur à seau de jetons simulant un
+lien montant contraint. Sur cinq essais, deux relais délivrent $2{,}2\times$ et
+trois relais $3{,}2\times$ le débit d'un relais unique, avec un surcoût de
+décodage négligeable dans la phase systématique sans perte. Nous rapportons
+aussi un constat d'ingénierie pratique : les limiteurs de débit à attente
+active sur le processeur s'effondrent sous la concurrence, et nous montrons
+comment une minuterie haute résolution combinée à un seau de jetons
+auto-correctif maintient des relais indépendants parfaitement uniformes.
+\end{abstract}
+
+\begin{IEEEkeywords}
+codes d'effacement, codes fontaines, codes LT, codes Raptor, agrégation de
+bande passante, transport multi-chemins, pair-à-pair, limitation de débit.
+\end{IEEEkeywords}
+
+\section{Introduction}
+\IEEEPARstart{L}{es} transferts de grande taille sur des réseaux contraints se
+heurtent à deux obstacles classiques : le lien goulot d'étranglement entre les
+extrémités et les protocoles de retransmission qui multiplient latence et
+gigue. Lorsqu'un chemin unique est limité en débit---un lien montant
+résidentiel, un quota cellulaire ou un relais partagé---le remède évident est
+d'en utiliser plusieurs à la fois. Le transport multi-chemins
+(\texttt{MPTCP}~\cite{rfc6824}, SCTP) et le regroupement de
+ressources~\cite{wischik2008survey} rendent cela possible au niveau de la
+couche transport, mais ils exigent une coordination des chemins, un couplage de
+congestion et un état de transport de bout en bout. En revanche, les codes
+fontaines~\cite{byers1998digital,luby2002lt,mackay2005fountain} rendent
+l'agrégation presque triviale : les symboles sont interchangeables, donc un
+émetteur peut simplement les répartir en tourniquet sur chaque chemin
+disponible et laisser le récepteur assembler la charge utile à partir de ce qui
+arrive.
+
+Orbit-Transfer exploite exactement cette propriété. L'émetteur découpe un
+fichier en $K$ blocs source, applique un précodage LDPC de type
+Raptor~\cite{shokrollahi2006raptor} pour obtenir $L=K+S$ entrées précodées, et
+émet un flux \emph{illimité} de symboles distincts. Le récepteur n'a besoin que
+de $K+\varepsilon$ symboles \emph{quelconques} pour reconstruire le fichier ;
+il ne demande jamais un bloc manquant. L'émetteur continue d'émettre jusqu'à ce
+que le récepteur signale \textsc{Ready}, de sorte que toute perte, tout
+réordonnancement ou toute défaillance de chemin est absorbé automatiquement.
+
+La conséquence pratique est un ordonnanceur multi-chemins très simple :
+répartir les symboles en tourniquet sur $N$ relais périphériques (et
+optionnellement un canal TCP pair-à-pair direct), désactiver les chemins en
+panne, et compter sur la propriété rateless pour terminer. Comme les relais
+n'ont pas besoin de se coordonner, la bande passante s'agrège linéairement :
+$N$ relais de capacité $C$ délivrent jusqu'à $N\cdot C$, à condition que chaque
+relais soit cadencé indépendamment et avec précision.
+
+Ce papier apporte les contributions suivantes :
+\begin{itemize}
+\item Une description complète du système Orbit-Transfer : un protocole binaire
+compact, un relais périphérique à salons avec mise en tampon pré-récepteur et
+contre-pression, un ordonnanceur multi-chemins, et un chiffrement AEAD par
+symbole (\S\ref{sec:arch}).
+\item La conception du codec fontaine---phase systématique, distribution
+Robust Soliton, précodage LDPC et décodage par épluchage---ainsi que ses
+paramètres (\S\ref{sec:codec}).
+\item Une étude empirique de l'agrégation : deux relais délivrent $2{,}2\times$
+et trois relais $3{,}2\times$ le débit d'un relais unique limité, et le codec
+termine avec un surcoût quasi nul dans la phase systématique
+(\S\ref{sec:eval}).
+\item Une correction pratique de la limitation de débit : les seaux de jetons
+à attente active ne passent pas à l'échelle sous concurrence ; les remplacer
+par une minuterie haute résolution et un modèle de crédit auto-correctif
+maintient des relais indépendants parfaitement uniformes
+(\S\ref{sec:throttle}).
+\end{itemize}
+
+\section{Architecture du système}
+\label{sec:arch}
+
+\begin{figure}[!t]
+\centering
+\scriptsize
+\begin{minipage}{0.95\columnwidth}
+\begin{verbatim}
+Emetteur --s--> Relais 1 --s--> Récepteur
+  |                ...                 ^
+  +--s--> Relais N --s-----------------+
+  +--s--> direct (optionnel)-----------+
+  <---------- READY -------------------+
+\end{verbatim}
+\end{minipage}
+\caption{Modèle du système. L'émetteur répartit les symboles sur $N$ relais et
+un canal pair-à-pair direct optionnel ; le récepteur fusionne tous les flux et
+signale \textsc{Ready} une fois le décodage terminé.}
+\label{fig:system}
+\end{figure}
+
+Le système (Fig.~\ref{fig:system}) comprend trois rôles : un \emph{émetteur},
+un ou plusieurs \emph{relais} et un \emph{récepteur}. L'émetteur se connecte à
+chaque relais via WebSocket et, lorsqu'un chemin direct est annoncé, au
+récepteur via TCP brut. Les deux parties partagent un identifiant de session
+sur 64 bits.
+
+\subsection{Protocole}
+Les trames binaires transitent par WebSocket (liens relais) ou TCP brut (P2P
+direct), avec l'agencement
+\texttt{[type : u8][longueur : u32 LE][charge utile]}. Le
+Tableau~\ref{tab:protocol} liste les types de messages. La trame \textsc{Meta}
+porte le nom du fichier, la taille de la charge utile, la taille des symboles,
+$K$ et une somme de contrôle XXH3 ; \textsc{Symbol} porte un symbole encodé ;
+\textsc{Ready} termine le transfert ; \textsc{Direct} annonce l'adresse
+d'écoute pair-à-pair du récepteur ; \textsc{Done} démonte une session.
+
+\begin{table}[!t]
+\centering
+\caption{Messages du protocole.}
+\label{tab:protocol}
+\begin{tabular}{@{}lp{0.62\columnwidth}@{}}
+\toprule
+Message & Charge utile \\
+\midrule
+\textsc{Hello} & identifiant de session (u64), rôle (émetteur/récepteur) \\
+\textsc{Meta} & identifiant, nom du fichier, taille, taille des symboles, $K$, somme \\
+\textsc{Symbol} & identifiant, esi (u32), données du symbole \\
+\textsc{Ready} & identifiant de session \\
+\textsc{Direct} & identifiant, adresse annoncée \\
+\textsc{Done} & identifiant de session \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Relais}
+Chaque relais maintient une table de \emph{salons} indexée par identifiant de
+session, avec un lien émetteur et un lien récepteur par salon. Comme le
+récepteur peut rejoindre plus tard, le relais met les symboles en tampon dans
+une file bornée ($\le 256$\,Mio) et les vidange dans l'ordre à l'enregistrement.
+Le routage repose uniquement sur l'identifiant de session ; le relais est
+sans état vis-à-vis de la charge utile et ne la décode jamais. Les canaux de
+sortie par connexion fournissent une contre-pression qui se propage au contrôle
+de flux TCP, de sorte qu'un récepteur lent ou un lien limité ne provoque jamais
+de pertes silencieuses---les symboles s'accumulent et l'émetteur est
+finalement freiné plutôt que de perdre des données.
+
+Le relais expose aussi un limiteur de débit de sortie par connexion
+(\S\ref{sec:throttle}) utilisé dans nos expériences pour émuler un lien montant
+contraint.
+
+\subsection{Sessions émetteur et récepteur}
+La session émetteur se connecte à tous les relais, ouvre des files bornées par
+chemin (1024 symboles) avec une tâche d'écriture chacune, émet \textsc{Meta},
+puis diffuse les symboles. Chaque tâche d'écriture vide sa file
+indépendamment au rythme propre du chemin, si bien que l'agrégat est la somme
+des chemins actifs ; un envoi en échec marque le chemin comme mort et sa charge
+est redistribuée automatiquement.
+
+La session récepteur lance une tâche de lecture par relais qui réémet les
+trames sur un canal unique, de sorte qu'une boucle de décodage à base de
+\texttt{select} fusionne tous les chemins (et le canal direct optionnel) en un
+flux ordonné. Après décodage, elle envoie \textsc{Ready} sur chaque lien puis
+\emph{vidange} chaque socket jusqu'à EOF avant de fermer---fermer avec des
+données non lues émettrait une réinitialisation TCP et purgerait le
+\textsc{Ready} en vol.
+
+\section{Codec fontaine rateless}
+\label{sec:codec}
+
+\subsection{Encodage}
+La charge utile est découpée en $K$ symboles source de taille égale. Un
+précodage LDPC de type Raptor~\cite{shokrollahi2006raptor,rfc5053} calcule
+\begin{equation}
+S = \max\!\bigl(2,\ \lfloor K/100\rfloor + 10\bigr)
+\end{equation}
+symboles de contrôle ; le contrôle $i$ est le XOR des symboles source dont
+l'indice est congru à $i$ modulo $S$, combiné aux sources $i\bmod K$ et
+$(i{+}1)\bmod K$. Les $L=K+S$ symboles précodés sont les entrées d'un encodeur
+LT~\cite{luby2002lt} qui tire son degré de la distribution Robust Soliton avec
+$c=0{,}1$, $\delta=0{,}05$ et $R=c\sqrt{K}\ln(K/\delta)$.
+
+Le code est \emph{systématique} : pour esi $<K$, l'encodeur émet directement le
+symbole source brut, si bien que dans le cas sans perte le récepteur
+reconstruit la charge utile à partir des $K$ symboles systématiques avec un
+surcoût \emph{nul}. Pour esi $\ge K$, il émet des combinaisons aléatoires. La
+génération des symboles est déterministe et reproductible : la sélection des
+voisins est ensemencée à partir de l'esi avec un PRNG ChaCha8, donc toute
+partie peut recalculer le graphe d'encodage à partir d'un esi sans dictionnaire
+partagé.
+
+\subsection{Décodage}
+Le décodeur construit le graphe de décodage sur les $L$ entrées précodées. Il
+amorce le processus d'épluchage avec les $S$ équations de contrôle et itère les
+équations de degré un : résoudre un symbole le XOR-e hors de chaque équation
+qui le mentionne, et une équation de degré un se résout immédiatement. La
+reconstruction se termine lorsque les $K+S$ entrées sont résolues ; la charge
+utile est ensuite vérifiée contre la somme de contrôle XXH3 portée par
+\textsc{Meta}. Les doublons et les symboles hors ordre sont inoffensifs (ils
+sont dédupliqués par esi), ce qui est la propriété qui rend l'agrégation
+multi-chemins triviale. Le noyau XOR est vectorisable SIMD, et le débit
+d'encodage dépasse $3$\,Gbit/s sur du matériel courant avec une charge utile de
+64\,Mio.
+
+\section{Agrégation multi-chemins}
+\label{sec:agg}
+
+L'agrégation dans Orbit-Transfer se réduit à une décision d'ordonnancement,
+car les symboles de fontaine sont interchangeables et indépendants de l'ordre.
+L'émetteur utilise un ordonnanceur déterministe~\cite{maymounkov2002online} qui
+répartit la charge des relais en tourniquet sur les $N$ relais tout en
+conservant un rapport relais/direct. Deux propriétés comptent en pratique :
+\begin{itemize}
+\item \textbf{Bascule en cas de chemin mort.} Un relais qui meurt en cours de
+transfert est désactivé ; ses symboles en file sont perdus, mais le récepteur
+ne s'en aperçoit jamais---il a besoin de $K+\varepsilon$ symboles
+quelconques, pas d'un sous-ensemble précis. L'ordonnanceur passe simplement à
+la suite.
+\item \textbf{Arrêt par vidange.} Après \textsc{Ready}, le récepteur vidange
+chaque lien relais jusqu'à EOF afin que les relais purgent leurs symboles en
+file proprement plutôt que de subir une réinitialisation TCP.
+\end{itemize}
+
+Comme chaque relais est cadencé indépendamment, l'agrégat attendu est $N\cdot
+C$. La section expérimentale (\S\ref{sec:eval}) confirme que cela tient à la
+variance près des limiteurs individuels.
+
+\section{Limitation de débit des relais}
+\label{sec:throttle}
+
+Nos expériences émulent des liens montants contraints avec un régulateur à seau
+de jetons par connexion au niveau du relais : chaque symbole coûte son nombre
+d'octets et le seau se remplit au débit configuré. Deux détails
+d'implémentation se sont révélés critiques.
+
+\subsection{L'attente active ne passe pas à l'échelle}
+La première implémentation cadencait un symbole en attendant activement sur
+\texttt{Instant::now()} tout en cédant la main à l'ordonnanceur :
+\begin{verbatim}
+while Instant::now() < deadline {
+    yield_now().await;
+}
+\end{verbatim}
+Seul, un relais était cadencé à $\approx 343$ symboles/s au lieu des $500$/s
+nominaux. Sous trois relais concurrents, les débits par relais se sont
+effondrés à $361/316/350$ symboles/s ($1028$/s au total au lieu de $1500$/s) :
+chaque tâche d'attente se dispute le processeur et le surcoût d'ordonnancement
+croît avec le nombre de boucles concurrentes. Le limiteur sous-estime le débit
+et perd son indépendance, ce qui sape directement l'affirmation d'agrégation.
+
+\subsection{Sommeils parkés avec un seau auto-correctif}
+Nous avons remplacé l'attente active par un vrai \texttt{sleep} et porté la
+résolution de la minuterie Windows à 1\,ms via \texttt{timeBeginPeriod(1)}.
+Dormir parke la tâche, donc les relais concurrents ne se disputent plus le
+processeur. Pourtant, la minuterie \texttt{tokio} dort encore $\approx 3{,}7$\,ms
+pour un $2$\,ms demandé, ce qui à lui seul sous-estimerait le débit nominal de
+moitié.
+
+La correction est un seau de jetons dont la comptabilité est
+\emph{auto-corrective} : la fenêtre de crédit est close au \emph{début} de
+chaque appel et \emph{jamais} après le sommeil, si bien que le temps réellement
+pris par le sommeil est recrédité au symbole suivant. Le débit à long terme
+converge donc vers la valeur configurée quelle que soit la granularité de la
+minuterie. Un plafond de rafale ($\approx 10$\,ms de crédit) empêche une longue
+inactivité de débloquer une rafale illimitée. Le résultat est un débit uniforme
+de $613/613/614$ symboles/s sur trois relais concurrents---un passage à
+l'échelle parfait de $3\times$ sans contention.
+
+\section{Évaluation expérimentale}
+\label{sec:eval}
+
+\subsection{Configuration}
+Toutes les expériences s'exécutent sur une seule machine Windows 11 en
+loopback, en mode release (les builds de débogage ralentissent l'encodeur d'un
+ordre de grandeur). Chaque relais limite son trafic sortant à $2$\,Mio/s
+nominaux. La charge utile est de 16\,Mio avec des symboles de 4096 octets
+($K=4096$). Nous rapportons cinq essais du banc d'agrégation ; le tableau donne
+la moyenne et l'étendue. Les facteurs d'agrégation sont calculés par essai
+comme le rapport des temps écoulés (la taille de la charge utile est identique
+entre les cas).
+
+\subsection{Surcoût du codec}
+Dans le cas sans perte, la phase systématique reconstruit à elle seule la
+charge utile : le décodeur termine exactement à $K$ symboles (surcoût $1{,}000$).
+Sous perte simulée de $5\%$, le surcoût est d'environ $1{,}1\times L$, bien dans
+la garantie Raptor. Le débit d'encodage dépasse $3$\,Gbit/s pour une charge
+utile de 64\,Mio ; le décodage de la même charge utile se termine en environ
+$0{,}2$\,s.
+
+\subsection{Agrégation}
+\begin{table}[!t]
+\centering
+\caption{Débit en fonction du nombre de relais limités (charge utile de
+16\,Mio, symboles de 4096 octets, moyenne de 5 essais).}
+\label{tab:bench}
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+Cas & Mio/s & Étendue & Symboles & Facteur \\
+\midrule
+1 relais & 2.29 & 2.19--2.34 & $\approx$21.6k & 1.00 \\
+2 relais & 5.01 & 4.31--5.39 & $\approx$34.5k & 2.19 \\
+3 relais & 7.24 & 6.66--7.78 & $\approx$34.6k & 3.16 \\
+3 relais + direct & 5.76 & 5.40--6.30 & $\approx$43.9k & 2.51 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Le Tableau~\ref{tab:bench} rapporte les résultats. Deux relais délivrent
+$2{,}19\times$ (étendue $1{,}84$--$2{,}47\times$) et trois relais $3{,}16\times$
+(étendue $2{,}84$--$3{,}70\times$) le débit de référence à un seul relais, ce
+qui correspond à l'échelle attendue $N\times$ à la variance des limiteurs près.
+Le cas à un relais est remarquablement stable ($2{,}19$--$2{,}34$\,Mio/s sur
+les essais).
+
+Le cas « 3 relais + direct » ajoute l'écouteur pair-à-pair du récepteur ; le
+canal direct ne transporte que la queue redondante (esi $\ge K$), car le
+récepteur se complète à environ $K$ symboles et les relais limités saturent
+déjà le flux de décodage. Par conséquent, le P2P direct ajoute peu sur ce banc
+de test en loopback. Il est prévu pour le scénario opposé---quand les relais
+sont indisponibles ou constituent le goulot---comme voie rapide avec bascule
+automatique, plutôt que comme multiplicateur par-dessus des relais saturés.
+
+\subsection{Indépendance des limiteurs}
+Le Tableau~\ref{tab:throttle} isole le limiteur en cadencant trois relais en
+parallèle sans sessions ni décodage. Les débits par relais sont à $0{,}4\%$
+près les uns des autres et leur somme vaut $3\times$ le débit d'un relais
+unique, ce qui confirme que l'agrégation n'est limitée que par les conduits
+individuels et non par une ressource processeur partagée.
+
+\begin{table}[!t]
+\centering
+\caption{Trafic sortant par relais avec trois relais limités simultanément.}
+\label{tab:throttle}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+Relais & Débit par relais & Total \\
+\midrule
+1 & 624 sym/s & 624/s \\
+3 & 613, 613, 614 sym/s & 1841/s \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Travaux connexes}
+Les codes fontaines naissent avec le cadre de la fontaine numérique de
+Byers \emph{et al.}~\cite{byers1998digital} et la construction LT de
+Luby~\cite{luby2002lt} ; MacKay en donne un panorama
+accessible~\cite{mackay2005fountain}. Les codes Raptor~\cite{shokrollahi2006raptor,rfc5053}
+et RaptorQ~\cite{rfc6330} ajoutent un précodage fixe pour ramener le surcoût de
+décodage à quelques pour cent et sont utilisés dans les normes de diffusion
+3GPP et de livraison fiable. Notre codec suit la recette Raptor (LT sur un
+précodage LDPC, phase systématique) à plus petite échelle et avec une graine de
+voisins déterministe et reproductible.
+
+Le transport multi-chemins a été normalisé sous la forme de
+\texttt{MPTCP}~\cite{rfc6824} et étudié à travers le prisme du regroupement de
+ressources de Wischik \emph{et al.}~\cite{wischik2008survey}. Contrairement au
+couplage au niveau transport, notre schéma n'a besoin d'aucune coordination de
+congestion entre les chemins : le code rateless absorbe les différences de
+débit entre chemins, et le seul état partagé est l'identifiant de session.
+
+Les codes fontaines sont proposés depuis longtemps pour la diffusion de masse
+pair-à-pair~\cite{maymounkov2002online} ; Orbit-Transfer rend l'extension
+multi-chemins explicite et la quantifie sur des relais limités en débit, ce qui,
+à notre connaissance, n'est pas rapporté dans la littérature des fontaines.
+
+\section{Conclusion et travaux futurs}
+Orbit-Transfer montre que les codes fontaines rateless transforment
+l'agrégation multi-chemins en un problème d'ordonnancement au gain
+essentiellement linéaire : $N$ relais limités en débit délivrent environ
+$N\times$ le débit d'un seul, car les symboles sont interchangeables et chaque
+chemin est cadencé indépendamment. Les enseignements d'ingénierie sont (i) le
+précodage systématique de type Raptor supprime entièrement le surcoût dans le
+cas sans perte, et (ii) les limiteurs de débit doivent reposer sur des sommeils
+parkés et être auto-correctifs pour maintenir des chemins indépendants
+uniformes sous concurrence.
+
+Les travaux en cours et futurs incluent des contrôles HDPC de type RaptorQ par-
+dessus le précodage LDPC pour un surcoût quasi optimal à faible $K$ ; et un
+chemin direct basé sur QUIC en alternative au TCP. Le relais est déjà
+agnostique au transport, et le protocole est assez compact pour transiter sur
+tout canal ordonné ou non.
+
+En complément de la pile multi-chemins native, un pont WebRTC est livré avec le
+paquet WebAssembly : les transferts navigateur-à-navigateur s'exécutent sur un
+canal de données SCTP avec le même codec fontaine compilé en WASM, avec un
+échange manuel de SDP pour la signalisation. Une leçon pratique est ressortie
+des tests navigateur : Chrome masque les candidats ICE hôtes derrière des noms
+mDNS (\texttt{*.local}) que certaines interfaces réseau ne peuvent pas
+résoudre, laissant l'agent ICE sans paire de candidats (bloqué dans l'état
+« new ») ; comme les ports des candidats ne sont pas masqués, l'ajout explicite
+d'un candidat loopback pointant vers le port du pair rétablit la connectivité
+entre onglets de la même machine. Le pont est validé de bout en bout dans le
+navigateur et par un test d'intégration sur canal simulé.
+
+\begin{thebibliography}{1}
+\bibitem{byers1998digital}
+J.~W. Byers, M.~Luby, M.~Mitzenmacher, and A.~Rege, ``A digital fountain approach
+to reliable distribution of bulk data,'' in \emph{Proc. ACM SIGCOMM}, 1998,
+pp.~56--67.
+\bibitem{luby2002lt}
+M.~Luby, ``LT codes,'' in \emph{Proc. 43rd IEEE Symp. Foundations of Computer
+Science (FOCS)}, 2002, pp.~271--280.
+\bibitem{mackay2005fountain}
+D.~J.~C. MacKay, ``Fountain codes,'' \emph{IEE Proc. Communications},
+vol.~152, no.~6, pp.~1062--1068, 2005.
+\bibitem{shokrollahi2006raptor}
+A.~Shokrollahi, ``Raptor codes,'' \emph{IEEE Trans. Information Theory},
+vol.~52, no.~6, pp.~2551--2567, 2006.
+\bibitem{rfc5053}
+M.~Luby, A.~Shokrollahi, M.~Watson, and T.~Stockhammer, ``Raptor forward error
+correction scheme for object delivery,'' IETF RFC 5053, 2007.
+\bibitem{rfc6330}
+M.~Luby, A.~Shokrollahi, M.~Watson, and T.~Stockhammer, ``RaptorQ forward error
+correction scheme for object delivery,'' IETF RFC 6330, 2011.
+\bibitem{rfc6824}
+A.~Ford, C.~Raiciu, M.~Handley, and O.~Bonaventure, ``TCP extensions for
+multipath operation with multiple addresses,'' IETF RFC 6824, 2013.
+\bibitem{wischik2008survey}
+D.~Wischik, M.~Handley, and M.~Bagnulo Braun, ``The resource pooling
+principle,'' \emph{ACM SIGCOMM Comput. Commun. Rev.}, vol.~38, no.~5,
+pp.~47--52, 2008.
+\bibitem{maymounkov2002online}
+P.~Maymounkov and D.~Mazi{\`e}res, ``Rateless codes and big downloads,'' in
+\emph{Proc. 2nd Int. Workshop on Peer-to-Peer Systems (IPTPS)}, 2003,
+pp.~247--255.
+\bibitem{webrtc}
+A.~Bergkvist \emph{et al.}, ``WebRTC 1.0: real-time communication between
+browsers,'' W3C Recommendation, 2021.
+\end{thebibliography}
+
+\end{document}

@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Orbit-Transfer · WebRTC demo</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 780px; margin: 32px auto; padding: 0 16px; color: #222; }
+  h1 { font-size: 20px; }
+  h2 { font-size: 15px; margin: 20px 0 8px; }
+  .badge { font-size: 12px; color: #666; }
+  textarea { width: 100%; box-sizing: border-box; height: 90px; font: 11px/1.4 monospace; }
+  pre { background: #f4f4f4; border-radius: 8px; padding: 10px; overflow-x: auto; max-height: 240px; overflow-y: auto; font-size: 12px; }
+  button { padding: 8px 14px; border-radius: 8px; border: 1px solid #999; background: #eee; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  label { display: inline-block; margin-right: 12px; }
+  .box { border: 1px solid #ddd; border-radius: 10px; padding: 14px; margin: 10px 0; }
+  .link { font: 12px/1.4 monospace; background: #eef; border: 1px solid #ccc; border-radius: 6px; padding: 8px; word-break: break-all; }
+  details { margin-top: 24px; }
+  summary { cursor: pointer; color: #555; font-size: 13px; }
+</style>
+</head>
+<body>
+<h1>Orbit-Transfer · WebRTC browser-to-browser</h1>
+<p class="badge">Fountain codes in WASM over a WebRTC data channel. The sender drags &amp; drops a file and gets a <b>shareable link</b>; the receiver opens it and the transfer runs P2P with no central server (only a tiny signaling room to exchange the SDP). Any file type works — the codec treats it as raw bytes and reconstructs them exactly.</p>
+
+<p><label><input type="checkbox" id="loopback" checked> Same machine — add loopback candidates (workaround for mDNS-masked host candidates)</label></p>
+<p>
+  <label>Symbol size:
+    <select id="symSize">
+      <option value="1024">1024 B</option>
+      <option value="4096" selected>4096 B</option>
+      <option value="16384">16 KiB</option>
+    </select>
+  </label>
+  <label>Channel: <select id="reliable">
+    <option value="reliable" selected>reliable</option>
+    <option value="unreliable">unreliable (SCTP, real loss)</option>
+  </select></label>
+  <label>Simulated loss:
+    <input type="range" id="loss" min="0" max="40" value="10"> <span id="lossLabel">10%</span>
+  </label>
+</p>
+
+<div id="hostBox" class="box">
+  <h2>Sender</h2>
+  <label>File: <input type="file" id="file"></label>
+  <button id="startHost" disabled>Drag &amp; drop → create share link</button>
+  <div id="linkArea" hidden>
+    <p>Share this link with the receiver (it includes the signaling room):</p>
+    <div class="link" id="shareLink"></div>
+    <button type="button" id="copyLink">Copy link</button>
+    <p class="badge" id="hostStatus">waiting for the receiver to open the link…</p>
+  </div>
+</div>
+
+<div id="guestBox" class="box" hidden>
+  <h2>Receiver</h2>
+  <p class="badge">You were sent a share link for room <b id="roomId"></b>. Adjust the simulated-loss slider above, then join.</p>
+  <button id="startGuest">Join as receiver</button>
+  <p class="badge" id="guestStatus">ready</p>
+</div>
+
+<h2>Log</h2>
+<pre id="log">—</pre>
+
+<div id="result" hidden>
+  <h2>Result</h2>
+  <pre id="resultText"></pre>
+</div>
+
+<details>
+  <summary>Manual signaling (advanced) — copy/paste SDP by hand</summary>
+  <div class="box">
+    <h2>Host (sender)</h2>
+    <button id="manualOffer">Create offer</button>
+    <textarea id="offerOut" readonly placeholder="(offer appears here)"></textarea>
+    <textarea id="answerIn" placeholder="paste the guest's answer here"></textarea>
+    <button id="manualConnect">Accept answer + send</button>
+  </div>
+  <div class="box">
+    <h2>Guest (receiver)</h2>
+    <textarea id="offerIn" placeholder="paste the host's offer here"></textarea>
+    <button id="manualAnswer">Accept offer + create answer</button>
+    <textarea id="answerOut" readonly placeholder="(answer appears here)"></textarea>
+  </div>
+</details>
+
+<script type="module">
+import { HostSession, GuestSession, hostShare, guestShare, BRIDGE_VERSION } from "./webrtc.js";
+
+const $ = (id) => document.getElementById(id);
+const log = document.getElementById("log");
+let host = null;
+
+line(`orbit-webrtc bridge v${BRIDGE_VERSION} · signaling: auto`);
+
+function line(msg) {
+  const t = new Date().toLocaleTimeString();
+  log.textContent += `[${t}] ${msg}\n`;
+  log.scrollTop = log.scrollHeight;
+}
+
+function showResult(meta, payload, ok, received, dropped, fed) {
+  $("result").hidden = false;
+  $("resultText").textContent =
+    `filename:    ${meta.filename}\n` +
+    `payload:     ${meta.payloadLength.toLocaleString()} B (K=${meta.k})\n` +
+    `received:    ${received} symbols (dropped ${dropped} simulated)\n` +
+    `fed:         ${fed} (overhead x${(fed / meta.k).toFixed(3)})\n` +
+    `decoded:     ${payload.length.toLocaleString()} B — ${ok ? "payload matches (XXH3 + byte compare)" : "MISMATCH"}`;
+}
+
+const loss = $("loss");
+$("lossLabel").textContent = loss.value + "%";
+loss.addEventListener("input", () => $("lossLabel").textContent = loss.value + "%");
+
+async function pickPayload() {
+  const file = $("file").files[0];
+  if (!file) { line("Pick a file first."); throw new Error("no file"); }
+  return { payload: new Uint8Array(await file.arrayBuffer()), name: file.name };
+}
+
+function settings() {
+  return {
+    reliable: $("reliable").value === "reliable",
+    maxRetransmits: 1,
+    loopback: $("loopback").checked,
+    loss: parseInt($("loss").value, 10) / 100,
+    symbolSize: parseInt($("symSize").value, 10),
+  };
+}
+
+$("file").addEventListener("change", () => {
+  $("startHost").disabled = !$("file").files[0];
+});
+
+// ---- Automated share-link flow -------------------------------------------------
+$("startHost").addEventListener("click", async () => {
+  try {
+    const { payload, name } = await pickPayload();
+    const s = settings();
+    $("startHost").disabled = true;
+    $("hostStatus").textContent = "creating room…";
+    const share = await hostShare(payload, s.symbolSize, {
+      ...s,
+      filename: name,
+      onLog: line,
+    });
+    host = share.host;
+    $("linkArea").hidden = false;
+    $("shareLink").textContent = share.url;
+    $("hostStatus").textContent = "waiting for the receiver to open the link…";
+    line(`share link: ${share.url}`);
+    const h = await share.waitForAnswer();
+    line("receiver connected — transfer complete");
+  } catch (e) { line("host error: " + e); $("startHost").disabled = false; }
+});
+
+$("copyLink").addEventListener("click", async () => {
+  const link = $("shareLink").textContent;
+  try { await navigator.clipboard.writeText(link); $("copyLink").textContent = "Copied!"; }
+  catch { window.prompt("Copy the link:", link); }
+  setTimeout(() => ($("copyLink").textContent = "Copy link"), 1500);
+});
+
+// ---- Guest auto-join (page opened with ?room=...) --------------------------------
+const roomParam = new URLSearchParams(window.location.search).get("room");
+if (roomParam) {
+  $("hostBox").hidden = true;
+  $("guestBox").hidden = false;
+  $("roomId").textContent = roomParam;
+  $("startGuest").addEventListener("click", async () => {
+    try {
+      $("startGuest").disabled = true;
+      $("guestStatus").textContent = "joining room " + roomParam + "…";
+      const s = settings();
+      await guestShare(roomParam, {
+        loss: s.loss,
+        loopback: s.loopback,
+        onLog: line,
+        onResult: ({ payload, ok, meta, received, dropped, fed }) =>
+          showResult(meta, payload, ok, received, dropped, fed),
+      });
+      $("guestStatus").textContent = "connected — decoding…";
+    } catch (e) { line("guest error: " + e); $("startGuest").disabled = false; }
+  });
+}
+
+// ---- Manual signaling (advanced) --------------------------------------------------
+async function buildHostForManual() {
+  const { payload, name } = await pickPayload();
+  const s = settings();
+  const h = new HostSession({
+    reliable: s.reliable,
+    maxRetransmits: 1,
+    loopback: s.loopback,
+    filename: name,
+    onLog: line,
+  });
+  host = h;
+  return { h, payload, s };
+}
+$("manualOffer").addEventListener("click", async () => {
+  try {
+    const { h } = await buildHostForManual();
+    $("offerOut").value = await h.createOffer();
+    line("offer created — copy it into the guest tab.");
+  } catch (e) { line("host error: " + e); }
+});
+$("manualConnect").addEventListener("click", async () => {
+  try {
+    const { payload, s } = await pickPayload();
+    if (!host) throw new Error("create an offer first");
+    await host.acceptAnswer($("answerIn").value, payload, s.symbolSize, s.loss);
+  } catch (e) { line("connect error: " + e); }
+});
+$("manualAnswer").addEventListener("click", async () => {
+  try {
+    const s = settings();
+    const guest = new GuestSession({
+      loss: s.loss,
+      loopback: s.loopback,
+      onLog: line,
+      onResult: ({ payload, ok, meta, received, dropped, fed }) =>
+        showResult(meta, payload, ok, received, dropped, fed),
+    });
+    $("answerOut").value = await guest.acceptOffer($("offerIn").value);
+    line("answer created — copy it into the host tab.");
+  } catch (e) { line("guest error: " + e); }
+});
+</script>
+</body>
+</html>

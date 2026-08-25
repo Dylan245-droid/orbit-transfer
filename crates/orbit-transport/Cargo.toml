@@ -1,0 +1,21 @@
+[package]
+name = "orbit-transport"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+orbit-fountain = { path = "../orbit-fountain" }
+orbit-protocol = { path = "../orbit-protocol" }
+orbit-crypto = { path = "../orbit-crypto" }
+tokio.workspace = true
+futures-util.workspace = true
+tokio-tungstenite.workspace = true
+anyhow.workspace = true
+bytes.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+rand.workspace = true
+quinn = "0.11"
+rcgen = "0.14"

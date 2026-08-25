@@ -1,0 +1,439 @@
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{textcomp}
+\usepackage{booktabs}
+\usepackage{url}
+\usepackage{xcolor}
+
+\hyphenation{op-tical net-works semi-conduc-tor}
+
+\begin{document}
+
+\title{Orbit-Transfer: Multi-Relay Bandwidth Aggregation\\ with Rateless Fountain Codes}
+
+\author{\IEEEauthorblockN{Dylan Ondo}
+\IEEEauthorblockA{\textit{Independent Researcher} \\
+Libreville, Gabon \\
+Email: danielebang59@gmail.com}}
+
+\maketitle
+
+\begin{abstract}
+This paper presents Orbit-Transfer, a hybrid peer-to-peer and edge-relay file
+transfer system that aggregates the capacity of multiple constrained network
+paths using rateless fountain codes. A payload is split into $K$ source
+symbols, augmented with $S$ LDPC precode checks, and the sender emits an
+unbounded stream of encoded symbols; the receiver reconstructs the payload
+from any $K+\varepsilon$ distinct symbols without retransmission requests.
+Because fountain symbols are interchangeable and order-independent, the
+sender can round-robin symbols across $N$ relays---and an optional direct
+peer-to-peer channel---so the aggregate throughput is the sum of the live
+paths. We evaluate the design on a multi-relay testbed in which each relay is
+rate-limited by a token-bucket uplink shaper. Over five runs, two relays
+deliver $2.2\times$ and three relays $3.2\times$ the single-relay throughput,
+with negligible decoding overhead in the lossless systematic phase. We also
+report a practical engineering finding: naive CPU-spinning rate limiters
+collapse under concurrency, and we show how a high-resolution timer combined
+with a self-correcting token bucket keeps independent relays paced uniformly.
+\end{abstract}
+
+\begin{IEEEkeywords}
+erasure codes, fountain codes, LT codes, Raptor codes, bandwidth aggregation,
+multipath transport, peer-to-peer, rate limiting.
+\end{IEEEkeywords}
+
+\section{Introduction}
+\IEEEPARstart{L}{arge} transfers over constrained networks face two classic
+obstacles: the bottleneck link between the endpoints and the retransmission
+protocols that multiply latency and jitter. When a single path is
+rate-limited---a residential uplink, a cellular quota, or a shared relay---the
+obvious remedy is to use several of them at once. Multipath transport
+(\texttt{MPTCP}~\cite{rfc6824}, SCTP) and resource pooling~\cite{wischik2008survey}
+make this possible at the transport layer, but they require path coordination,
+congestion coupling, and end-to-end transport state. In contrast, fountain
+codes~\cite{byers1998digital,luby2002lt,mackay2005fountain} make aggregation
+nearly trivial: symbols are interchangeable, so a sender may simply round-robin
+them over every available path and let the receiver assemble the payload from
+whatever arrives.
+
+Orbit-Transfer exploits exactly this property. A sender splits a file into $K$
+source blocks, applies a Raptor-style LDPC precode~\cite{shokrollahi2006raptor}
+to obtain $L=K+S$ precoded inputs, and emits an \emph{unbounded} stream of
+distinct symbols. The receiver needs only $K+\varepsilon$ \emph{any} symbols to
+rebuild the file; it never asks for a missing block. The sender keeps emitting
+until the receiver signals \textsc{Ready}, so any loss rate, reordering, or
+path failure is absorbed automatically.
+
+The practical consequence is a very simple multi-path scheduler: distribute
+symbols round-robin across $N$ edge relays (and optionally a direct peer-to-peer
+TCP channel), disable paths that fail, and rely on the rateless property to
+finish. Because the relays do not need to coordinate, bandwidth aggregates
+linearly: $N$ relays of capacity $C$ deliver up to $N\cdot C$, as long as each
+relay is paced independently and accurately.
+
+This paper makes the following contributions:
+\begin{itemize}
+\item A complete system description of Orbit-Transfer: a compact binary
+protocol, a room-based edge relay with pre-receiver buffering and backpressure,
+a multi-path scheduler, and per-symbol AEAD encryption (\S\ref{sec:arch}).
+\item The fountain codec design---systematic phase, Robust Soliton
+distribution, LDPC precoding, and peeling decoding---and its parameters
+(\S\ref{sec:codec}).
+\item An empirical aggregation study: two relays deliver $2.2\times$ and three
+relays $3.2\times$ a single rate-limited relay, and the codec finishes with
+essentially zero overhead in the systematic phase (\S\ref{sec:eval}).
+\item A practical rate-limiting fix: CPU-spinning token buckets do not scale
+under concurrency; replacing them with a high-resolution timer and a
+self-correcting credit model keeps independent relays perfectly uniform
+(\S\ref{sec:throttle}).
+\end{itemize}
+
+\section{System Architecture}
+\label{sec:arch}
+
+\begin{figure}[!t]
+\centering
+\scriptsize
+\begin{minipage}{0.95\columnwidth}
+\begin{verbatim}
+Sender --s--> Relay 1 --s--> Receiver
+  |              ...               ^
+  +--s--> Relay N --s--------------+
+  +--s--> direct (optional)--------+
+  <---------- READY ---------------+
+\end{verbatim}
+\end{minipage}
+\caption{System model. The sender distributes symbols over $N$ relays and an
+optional direct peer-to-peer channel; the receiver merges all feeds and signals
+\textsc{Ready} once decoded.}
+\label{fig:system}
+\end{figure}
+
+The system (Fig.~\ref{fig:system}) comprises three roles: a \emph{sender}, one
+or more \emph{relays}, and a \emph{receiver}. The sender connects to every
+relay over WebSocket and, when a direct path is advertised, to the receiver
+over raw TCP. Both sides share a 64-bit session identifier.
+
+\subsection{Protocol}
+Binary frames are carried over WebSocket (relay links) or raw TCP (direct
+P2P), with the layout
+\texttt{[type: u8][len: u32 LE][payload]}. Table~\ref{tab:protocol} lists the
+message types. The \textsc{Meta} frame carries the filename, payload size,
+symbol size, $K$, and an XXH3 checksum; \textsc{Symbol} carries an encoding
+symbol; \textsc{Ready} terminates the transfer; \textsc{Direct} advertises the
+receiver's peer-to-peer listener address; \textsc{Done} tears a session down.
+
+\begin{table}[!t]
+\centering
+\caption{Protocol messages.}
+\label{tab:protocol}
+\begin{tabular}{@{}lp{0.62\columnwidth}@{}}
+\toprule
+Message & Payload \\
+\midrule
+\textsc{Hello} & session id (u64), role (sender/receiver) \\
+\textsc{Meta} & session id, filename, size, symbol size, $K$, checksum \\
+\textsc{Symbol} & session id, esi (u32), symbol data \\
+\textsc{Ready} & session id \\
+\textsc{Direct} & session id, advertised address \\
+\textsc{Done} & session id \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Relay}
+Each relay maintains a map of \emph{rooms} keyed by session id, with one
+sender link and one receiver link per room. Because the receiver may join
+later, the relay buffers symbols in a bounded queue ($\le 256$\,MiB) and flushes
+them in order on registration. Routing is entirely by session id; the relay is
+stateless with respect to the payload and never decodes it. Per-connection
+outgoing channels provide backpressure that propagates to TCP flow control, so
+a slow receiver or a rate-limited link never causes silent drops---symbols
+queue and the sender is eventually throttled rather than losing data.
+
+The relay also exposes a per-connection egress rate limiter
+(\S\ref{sec:throttle}) used in our experiments to emulate a constrained uplink.
+
+\subsection{Sender and receiver sessions}
+The sender session attaches to all relays, opens per-path bounded queues
+(1024 symbols) with one writer task each, emits \textsc{Meta}, and then streams
+symbols. Each writer task drains its queue independently at the path's own
+rate, so the aggregate is the sum of live paths; a failed send marks the path
+dead and its load is redistributed automatically.
+
+The receiver session spawns one reader task per relay that re-emits frames on
+a single channel, so a \texttt{select}-based decode loop merges all paths (and
+the optional direct channel) into one ordered feed. The direct path runs over
+raw TCP by default and over \textbf{QUIC} when the receiver advertises a
+\texttt{quic://} address (the sender picks the transport from the prefix);
+both carry the same binary framing. After decoding, it sends \textsc{Ready} on
+every link and then \emph{drains} each socket to EOF before closing---closing
+with unread data would emit a TCP reset and purge the in-flight
+\textsc{Ready}.
+
+\section{Rateless Fountain Codec}
+\label{sec:codec}
+
+\subsection{Encoding}
+The payload is split into $K$ source symbols of equal size. A Raptor-style
+LDPC precode~\cite{shokrollahi2006raptor,rfc5053} computes
+\begin{equation}
+S = \max\!\bigl(2,\ \lfloor K/100\rfloor + 10\bigr)
+\end{equation}
+check symbols; check $i$ is the XOR of the source symbols whose index is
+congruent to $i$ modulo $S$ together with sources $i\bmod K$ and $(i{+}1)\bmod K$.
+A RaptorQ-style HDPC~\cite{rfc6330} layer then appends $H$ high-density checks,
+where $H$ is the smallest integer such that
+\begin{equation}
+\binom{H}{\lfloor H/2\rfloor} \ge K + S,
+\end{equation}
+and check $i$ XORs a dense pseudo-random subset (about half) of the $K+S$
+precoded inputs, seeded deterministically from the check index. The resulting
+$L=K+S+H$ precoded symbols are the inputs to an LT encoder~\cite{luby2002lt}
+that draws its degree from the Robust Soliton Distribution with
+$c=0.1$, $\delta=0.05$, and $R=c\sqrt{K}\ln(K/\delta)$. The HDPC checks act as
+the decoding graph's safety net: at small $K$ they let reconstruction finish
+near $K+\varepsilon$ instead of stalling on the sparser LDPC graph.
+
+The code is \emph{systematic}: for esi $<K$ the encoder emits the raw source
+symbol directly, so in the lossless case the receiver reconstructs the payload
+from the $K$ systematic symbols with \emph{zero} overhead. For esi $\ge K$ it
+emits random combinations. Symbol generation is deterministic and
+reproducible: the neighbor selection is seeded from the esi with a
+ChaCha8 PRNG, so any party can recompute the encoding graph from an esi
+without a shared dictionary.
+
+\subsection{Decoding}
+The decoder builds the decoding graph over the $L$ precoded inputs. It seeds
+the peeling process with the $S$ LDPC and $H$ HDPC check equations and iterates
+degree-one equations: resolving a symbol XORs it out of every equation that
+mentions it, and a degree-one equation resolves immediately. The dense HDPC
+equations resolve last, guaranteeing the graph completes. Reconstruction
+completes once all $K+S+H$ inputs are resolved; the payload is then verified
+against the XXH3 checksum carried in \textsc{Meta}. Duplicate and out-of-order
+symbols are harmless (they are de-duplicated by esi), which is the property
+that makes multi-path aggregation trivial. The core XOR kernel is
+SIMD-vectorizable, and the encode rate exceeds $3$\,Gb/s on commodity hardware
+with a 64\,MiB payload.
+
+\section{Multi-Path Aggregation}
+\label{sec:agg}
+
+Aggregation in Orbit-Transfer reduces to a scheduling decision, because
+fountain symbols are interchangeable and order-independent. The sender uses a
+deterministic scheduler~\cite{maymounkov2002online} that round-robins the relay
+load across the $N$ relays while keeping a relay/direct ratio. Two properties
+matter in practice:
+\begin{itemize}
+\item \textbf{Dead-path fallback.} A relay that dies mid-transfer is disabled;
+its queued symbols are lost, but the receiver never notices---it needs any
+$K+\varepsilon$ symbols, not a specific subset. The scheduler simply moves on.
+\item \textbf{Drain-based shutdown.} After \textsc{Ready}, the receiver drains
+every relay link to EOF so relays flush their queued symbols cleanly rather
+than hitting a TCP reset.
+\end{itemize}
+
+Because each relay is paced independently, the expected aggregate is $N\cdot C$.
+The experimental section (\S\ref{sec:eval}) confirms this holds to within the
+variance of the per-relay limiters.
+
+\section{Relay Rate Limiting}
+\label{sec:throttle}
+
+Our experiments emulate constrained uplinks with a per-connection token-bucket
+shaper at the relay: each symbol costs its byte count, and the bucket refills
+at the configured rate. Two implementation details turned out to be critical.
+
+\subsection{Spin-yield pacing does not scale}
+The first implementation paced a symbol by spinning on
+\texttt{Instant::now()} while yielding to the scheduler:
+\begin{verbatim}
+while Instant::now() < deadline {
+    yield_now().await;
+}
+\end{verbatim}
+Alone, one relay paced at $\approx 343$ symbols/s instead of the nominal
+$500$/s. Under three concurrent relays the per-relay rates collapsed to
+$361/316/350$ symbols/s ($1028$/s total instead of $1500$/s): each spinning task
+contends for CPU, and the scheduling overhead grows with the number of
+concurrent spinners. The limiter both undershoots and loses independence, which
+directly undermines the aggregation claim.
+
+\subsection{Parked sleeps with a self-correcting bucket}
+We replaced the spin with a real \texttt{sleep} and raised the Windows timer
+resolution to 1\,ms via \texttt{timeBeginPeriod(1)}. Sleeping parks the task,
+so concurrent relays no longer contend for CPU. Yet the \texttt{tokio} timer
+still sleeps $\approx 3.7$\,ms for a requested $2$\,ms, which alone would
+undershoot the nominal rate by half.
+
+The fix is a token bucket whose accounting is \emph{self-correcting}: the
+credit window is closed at the \emph{start} of every call and \emph{never}
+after the sleep, so whatever time the sleep actually took is credited back to
+the next symbol. The long-term rate therefore converges to the configured
+value regardless of the timer's granularity. A burst cap ($\approx 10$\,ms of
+credit) prevents a long idle from unlocking an unbounded run. The result is a
+uniform $613/613/614$ symbols/s across three concurrent relays---a perfect
+$3\times$ scale-up with no contention.
+
+\section{Experimental Evaluation}
+\label{sec:eval}
+
+\subsection{Setup}
+All experiments run on a single Windows 11 machine over loopback, in release
+mode (debug builds slow the encoder by an order of magnitude). Each relay
+rate-limits its egress to a nominal $2$\,MiB/s. The payload is 16\,MiB with
+4096-byte symbols ($K=4096$). We report five runs of the aggregation bench;
+the table gives the mean and range. Aggregation factors are computed per-run
+as the ratio of elapsed times (payload size is identical across cases).
+
+\subsection{Codec overhead}
+In the lossless case the systematic phase alone reconstructs the payload:
+the decoder finishes at exactly $K$ symbols (overhead $1.000$). Under simulated
+$5\%$ loss the overhead is $\approx 1.1\times L$, well inside the Raptor
+guarantee. Encode throughput exceeds $3$\,Gb/s for a 64\,MiB payload; decode of
+the same payload completes in $\approx 0.2$\,s.
+
+\subsection{Aggregation}
+\begin{table}[!t]
+\centering
+\caption{Throughput vs.\ number of rate-limited relays (16\,MiB payload,
+4096-B symbols, mean of 5 runs).}
+\label{tab:bench}
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+Case & MiB/s & Range & Symbols & Factor \\
+\midrule
+1 relay & 2.29 & 2.19--2.34 & $\approx$21.6k & 1.00 \\
+2 relays & 5.01 & 4.31--5.39 & $\approx$34.5k & 2.19 \\
+3 relays & 7.24 & 6.66--7.78 & $\approx$34.6k & 3.16 \\
+3 relays + direct & 5.76 & 5.40--6.30 & $\approx$43.9k & 2.51 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:bench} reports the results. Two relays deliver $2.19\times$
+(range $1.84$--$2.47\times$) and three relays $3.16\times$ (range
+$2.84$--$3.70\times$) the single-relay baseline, matching the expected $N\times$
+scaling to within the per-relay limiter variance. The single-relay case is
+remarkably stable ($2.19$--$2.34$\,MiB/s across runs).
+
+The ``3 relays + direct'' case adds the receiver's peer-to-peer listener; the
+direct channel carries only the redundant tail (esi $\ge K$), because the
+receiver completes at $\approx K$ symbols and the throttled relays already
+saturate the decode feed. Consequently direct P2P adds little on this loopback
+testbed. It is intended for the opposite scenario---when relays are the
+unavailable or the bottleneck path, direct P2P is the faster lane with
+automatic fallback---rather than as a multiplier on top of saturated relays.
+
+\subsection{Rate-limiter independence}
+Table~\ref{tab:throttle} isolates the limiter by pacing three relays in
+parallel with no sessions or decoding. The per-relay rates are within $0.4\%$
+of each other and sum to $3\times$ the single-relay rate, confirming that the
+aggregation is limited only by the per-path pipes and not by any shared CPU
+resource.
+
+\begin{table}[!t]
+\centering
+\caption{Per-relay egress with three concurrently throttled relays.}
+\label{tab:throttle}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+Relays & Per-relay rate & Total \\
+\midrule
+1 & 624 sym/s & 624/s \\
+3 & 613, 613, 614 sym/s & 1841/s \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Related Work}
+Fountain codes originate with the digital-fountain framework of
+Byers \emph{et al.}~\cite{byers1998digital} and the LT construction of
+Luby~\cite{luby2002lt}; MacKay gives an accessible survey~\cite{mackay2005fountain}.
+Raptor~\cite{shokrollahi2006raptor,rfc5053} and RaptorQ~\cite{rfc6330} codes add
+a fixed precode to reduce decoding overhead to a few percent and are used in
+3GPP broadcast and reliable delivery standards. Our codec follows the Raptor
+recipe (LT over an LDPC precode, systematic phase) at smaller scale and with a
+deterministic, reproducible neighbor seed.
+
+Multipath transport has been standardized as
+\texttt{MPTCP}~\cite{rfc6824} and studied through the resource-pooling lens of
+Wischik \emph{et al.}~\cite{wischik2008survey}. In contrast to transport-layer
+coupling, our scheme needs no congestion coordination between paths: the
+rateless code absorbs the path-to-path rate differences, and the only shared
+state is the session id.
+
+Fountain codes have long been proposed for peer-to-peer bulk
+delivery~\cite{maymounkov2002online}; Orbit-Transfer makes the multi-path
+extension explicit and quantifies it on rate-limited relays, which to our
+knowledge is not reported in the fountain literature.
+
+\section{Conclusion and Future Work}
+Orbit-Transfer shows that rateless fountain codes turn multi-path aggregation
+into a scheduling problem with an essentially linear payoff: $N$ rate-limited
+relays deliver $\approx N\times$ the throughput of one, because symbols are
+interchangeable and each path is paced independently. The engineering
+takeaways are (i) the systematic Raptor-style precode removes overhead entirely
+in the lossless case, and (ii) rate limiters must be parked-sleep based and
+self-correcting to keep independent paths uniform under concurrency.
+
+Ongoing and future work includes extending the direct path beyond TCP and QUIC
+(already implemented: the receiver may advertise a \texttt{quic://} listener and
+the sender picks QUIC automatically, giving 0-RTT setup and connection
+migration), and pushing the RaptorQ-style precode toward even lower overhead at
+very small $K$. The relay is already transport-agnostic, and the protocol is
+compact enough to carry over any ordered or unordered channel.
+
+In addition to the native multi-path stack, a WebRTC bridge is shipped with the
+WebAssembly package: browser-to-browser transfers run over an SCTP data channel
+with the same fountain codec compiled to WASM. Signaling is automated via a
+tiny in-memory room on the static server: the sender drags a file and gets a
+shareable \texttt{?room=<id>} link, the receiver opens it, and the SDP
+offer/answer is exchanged over HTTP. A practical lesson emerged from browser
+testing: Chrome masks host ICE candidates behind mDNS names
+(\texttt{*.local}) that some network interfaces cannot resolve, leaving the
+ICE agent with no candidate pair (stuck in the ``new'' state); since candidate
+ports are not masked, adding an explicit loopback candidate pointing at the
+peer's port restores connectivity between tabs on the same host. The bridge is
+validated end-to-end in the browser and through mocked-channel integration
+tests (including the automated share-link flow).
+
+\begin{thebibliography}{1}
+\bibitem{byers1998digital}
+J.~W. Byers, M.~Luby, M.~Mitzenmacher, and A.~Rege, ``A digital fountain approach
+to reliable distribution of bulk data,'' in \emph{Proc. ACM SIGCOMM}, 1998,
+pp.~56--67.
+\bibitem{luby2002lt}
+M.~Luby, ``LT codes,'' in \emph{Proc. 43rd IEEE Symp. Foundations of Computer
+Science (FOCS)}, 2002, pp.~271--280.
+\bibitem{mackay2005fountain}
+D.~J.~C. MacKay, ``Fountain codes,'' \emph{IEE Proc. Communications},
+vol.~152, no.~6, pp.~1062--1068, 2005.
+\bibitem{shokrollahi2006raptor}
+A.~Shokrollahi, ``Raptor codes,'' \emph{IEEE Trans. Information Theory},
+vol.~52, no.~6, pp.~2551--2567, 2006.
+\bibitem{rfc5053}
+M.~Luby, A.~Shokrollahi, M.~Watson, and T.~Stockhammer, ``Raptor forward error
+correction scheme for object delivery,'' IETF RFC 5053, 2007.
+\bibitem{rfc6330}
+M.~Luby, A.~Shokrollahi, M.~Watson, and T.~Stockhammer, ``RaptorQ forward error
+correction scheme for object delivery,'' IETF RFC 6330, 2011.
+\bibitem{rfc6824}
+A.~Ford, C.~Raiciu, M.~Handley, and O.~Bonaventure, ``TCP extensions for
+multipath operation with multiple addresses,'' IETF RFC 6824, 2013.
+\bibitem{wischik2008survey}
+D.~Wischik, M.~Handley, and M.~Bagnulo Braun, ``The resource pooling
+principle,'' \emph{ACM SIGCOMM Comput. Commun. Rev.}, vol.~38, no.~5,
+pp.~47--52, 2008.
+\bibitem{maymounkov2002online}
+P.~Maymounkov and D.~Mazi{\`e}res, ``Rateless codes and big downloads,'' in
+\emph{Proc. 2nd Int. Workshop on Peer-to-Peer Systems (IPTPS)}, 2003,
+pp.~247--255.
+\bibitem{webrtc}
+A.~Bergkvist \emph{et al.}, ``WebRTC 1.0: real-time communication between
+browsers,'' W3C Recommendation, 2021.
+\end{thebibliography}
+
+\end{document}

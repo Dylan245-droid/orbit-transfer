@@ -1,0 +1,53 @@
+{
+  "name": "orbit-transfer-wasm",
+  "version": "0.2.0",
+  "description": "Rateless fountain codes (LDPC + HDPC precoding) with TypeScript bindings for Orbit-Transfer: encode/decode files in the browser with built-in loss tolerance",
+  "keywords": [
+    "fountain",
+    "erasure",
+    "rateless",
+    "ldpc",
+    "hdpc",
+    "raptor",
+    "p2p",
+    "wasm",
+    "webrtc",
+    "orbit-transfer"
+  ],
+  "license": "MIT OR Apache-2.0",
+  "author": "Dylan Ondo",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/REPLACE-ME/orbit-transfer.git"
+  },
+  "homepage": "https://github.com/REPLACE-ME/orbit-transfer",
+  "bugs": {
+    "url": "https://github.com/REPLACE-ME/orbit-transfer/issues"
+  },
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "pkg",
+    "src"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build:wasm": "wasm-pack build .. --target web --out-dir ts/pkg --out-name orbit_wasm",
+    "build:ts": "tsc -p tsconfig.json",
+    "build": "npm run build:wasm && npm run build:ts",
+    "demo:webrtc": "node ../webrtc/serve.mjs",
+    "test:webrtc": "node ../webrtc/webrtc.test.mjs",
+    "prepublishOnly": "npm run build"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  }
+}

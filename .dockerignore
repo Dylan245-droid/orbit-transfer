@@ -1,0 +1,12 @@
+target
+crates/orbit-wasm/ts/node_modules
+crates/orbit-wasm/ts/pkg
+crates/orbit-wasm/ts/dist
+crates/orbit-wasm/webrtc/media
+paper/*.pdf
+paper/*.aux
+paper/*.log
+.git
+.gitignore
+Dockerfile
+.dockerignore

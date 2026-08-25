@@ -1,0 +1,14 @@
+[package]
+name = "orbit-protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+orbit-fountain = { path = "../orbit-fountain" }
+serde.workspace = true
+serde_json.workspace = true
+bytes.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+xxhash-rust.workspace = true
