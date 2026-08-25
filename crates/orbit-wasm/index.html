@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Orbit-Transfer · live demo</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 640px; margin: 64px auto; padding: 0 24px; color: #222; line-height: 1.5; }
+  h1 { font-size: 26px; }
+  .badge { font-size: 13px; color: #666; }
+  .card { border: 1px solid #ddd; border-radius: 10px; padding: 18px 20px; margin: 14px 0; text-decoration: none; display: block; color: inherit; }
+  .card:hover { border-color: #999; background: #fafafa; }
+  .card h2 { margin: 0 0 6px; font-size: 17px; }
+  .card p { margin: 0; font-size: 14px; color: #444; }
+  code { background: #f2f2f2; padding: 1px 5px; border-radius: 4px; font-size: 13px; }
+</style>
+</head>
+<body>
+<h1>Orbit-Transfer · live demo</h1>
+<p class="badge">Hybrid P2P / edge-relay file transfer with rateless fountain codes (LDPC + HDPC). Rust codec compiled to WASM, running in your browser. Open a demo:</p>
+
+<a class="card" href="/webrtc/">
+  <h2>WebRTC browser-to-browser transfer</h2>
+  <p>Drag &amp; drop a file, share a <code>?room=</code> link, and transfer P2P over a WebRTC data channel — with a simulated-loss slider to show the rateless code absorbing packet loss.</p>
+</a>
+
+<a class="card" href="/demo/">
+  <h2>Fountain codec in the browser</h2>
+  <p>Encode + decode any file entirely in the tab, and watch the decode overhead stay near 1× even at high simulated loss.</p>
+</a>
+
+<p class="badge">Source: <a href="https://github.com/Dylan245-droid/orbit-transfer">github.com/Dylan245-droid/orbit-transfer</a> · npm: <code>orbit-transfer-wasm</code> · Docker: <code>dylanondo/orbit-relay</code></p>
+</body>
+</html>
