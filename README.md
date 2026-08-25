@@ -4,8 +4,15 @@
 [![Docker](https://img.shields.io/docker/v/dylanondo/orbit-relay?label=docker)](https://hub.docker.com/r/dylanondo/orbit-relay)
 [![GitHub](https://img.shields.io/github/v/release/Dylan245-droid/orbit-transfer)](https://github.com/Dylan245-droid/orbit-transfer)
 
-**Live demo**: [fountain codec in the browser](https://dylan245-droid.github.io/orbit-transfer/demo/) ·
-[WebRTC browser-to-browser transfer](https://dylan245-droid.github.io/orbit-transfer/webrtc/)
+**Live demo**: [WebRTC share-link transfer (full, automated signaling)](https://orbit-transfer-theta.vercel.app/webrtc/) ·
+[fountain codec in the browser](https://dylan245-droid.github.io/orbit-transfer/demo/) ·
+[WebRTC (static fallback, manual SDP)](https://dylan245-droid.github.io/orbit-transfer/webrtc/)
+
+> The Vercel demo (`orbit-transfer-theta.vercel.app`) runs the automated
+> signaling room (`/api/rooms`) so two peers can transfer over a shareable
+> `?room=<id>` link. The GitHub Pages copy is fully static — the signaling
+> API is unavailable there, so it falls back to manual SDP (great for a
+> two-tab, same-machine demo).
 
 Hybrid P2P + edge-relay file transfer with **rateless fountain codes** (LT + LDPC + HDPC).
 
