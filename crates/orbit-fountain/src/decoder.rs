@@ -35,7 +35,13 @@ pub struct FountainDecoder {
     sampler: SolitonSampler,
 
     resolved_source_symbols: HashMap<usize, Vec<u8>>,
-    active_equations: Vec<ActiveEquation>,
+    /// Active equations in slot-based storage (`None` = resolved/removed).
+    active_equations: Vec<Option<ActiveEquation>>,
+    /// Reverse index: input -> equation slots that still mention it. Lets the
+    /// peeling ripple touch only the equations that actually contain the
+    /// resolved input, instead of draining every equation each step (the old
+    /// O(active_equations) per symbol made the browser decoder the bottleneck).
+    rev: HashMap<usize, Vec<usize>>,
     received_esis: HashSet<u32>,
 }
 
@@ -51,15 +57,20 @@ impl FountainDecoder {
         // symbols are resolved through the checks instead of stalling the
         // decode until enough random symbols arrive.
         let mut active_equations = Vec::with_capacity(s + h);
+        let mut rev: HashMap<usize, Vec<usize>> = HashMap::with_capacity(l * 2);
+        let mut add_equation = |data: Vec<u8>, neighbors: HashSet<usize>| {
+            let slot = active_equations.len();
+            for &n in &neighbors {
+                rev.entry(n).or_default().push(slot);
+            }
+            active_equations.push(Some(ActiveEquation { data, neighbors }));
+        };
         for i in 0..s {
             let mut neighbors: HashSet<usize> = precode::precode_neighbors(k, s, i)
                 .into_iter()
                 .collect();
             neighbors.insert(k + i);
-            active_equations.push(ActiveEquation {
-                data: vec![0u8; symbol_size],
-                neighbors,
-            });
+            add_equation(vec![0u8; symbol_size], neighbors);
         }
 
         // HDPC constraint equations: a dense XOR over the K + S precoded
@@ -70,10 +81,7 @@ impl FountainDecoder {
                 .into_iter()
                 .collect();
             neighbors.insert(k + s + i);
-            active_equations.push(ActiveEquation {
-                data: vec![0u8; symbol_size],
-                neighbors,
-            });
+            add_equation(vec![0u8; symbol_size], neighbors);
         }
 
         Self {
@@ -85,6 +93,7 @@ impl FountainDecoder {
             sampler: SolitonSampler::new(l),
             resolved_source_symbols: HashMap::with_capacity(l),
             active_equations,
+            rev,
             received_esis: HashSet::new(),
         }
     }
@@ -143,32 +152,41 @@ impl FountainDecoder {
             self.resolved_source_symbols.insert(single_neighbor, data);
             queue.push_back(single_neighbor);
         } else if !neighbors.is_empty() {
-            self.active_equations.push(ActiveEquation { data, neighbors });
+            let slot = self.active_equations.len();
+            for &n in &neighbors {
+                self.rev.entry(n).or_default().push(slot);
+            }
+            self.active_equations.push(Some(ActiveEquation { data, neighbors }));
         }
 
-        // Ripple resolution queue
+        // Ripple resolution queue: only equations that actually mention the
+        // resolved input are touched (via the reverse index), so each step is
+        // O(degree) instead of O(active_equations).
         while let Some(resolved_idx) = queue.pop_front() {
             let resolved_data = self.resolved_source_symbols.get(&resolved_idx).unwrap().clone();
 
-            let mut remaining_equations = Vec::with_capacity(self.active_equations.len());
-
-            for mut eq in self.active_equations.drain(..) {
-                if eq.neighbors.remove(&resolved_idx) {
-                    xor_inplace(&mut eq.data, &resolved_data);
+            let eq_slots = self.rev.remove(&resolved_idx).unwrap_or_default();
+            for slot in eq_slots {
+                let Some(eq) = self.active_equations.get_mut(slot).and_then(|e| e.as_mut()) else {
+                    continue; // slot already consumed
+                };
+                if !eq.neighbors.remove(&resolved_idx) {
+                    continue;
                 }
+                xor_inplace(&mut eq.data, &resolved_data);
 
                 if eq.neighbors.len() == 1 {
                     let new_resolved = *eq.neighbors.iter().next().unwrap();
                     if !self.resolved_source_symbols.contains_key(&new_resolved) {
-                        self.resolved_source_symbols.insert(new_resolved, eq.data);
+                        let data = std::mem::take(&mut eq.data);
+                        self.active_equations[slot] = None;
+                        self.resolved_source_symbols.insert(new_resolved, data);
                         queue.push_back(new_resolved);
                     }
-                } else if !eq.neighbors.is_empty() {
-                    remaining_equations.push(eq);
+                } else if eq.neighbors.is_empty() {
+                    self.active_equations[slot] = None;
                 }
             }
-
-            self.active_equations = remaining_equations;
         }
 
         self.is_complete()
