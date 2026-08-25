@@ -9,11 +9,13 @@
   button { padding: 8px 16px; border-radius: 8px; border: 1px solid #999; background: #eee; cursor: pointer; }
   button:disabled { opacity: .5; cursor: not-allowed; }
   .badge { font-size: 12px; color: #666; }
+  .err { color: #c00; font-weight: 600; }
+  .ok { color: #0a7d2a; }
 </style>
 </head>
 <body>
 <h1>Orbit-Transfer · fountain codes in the browser</h1>
-<p class="badge">Rust compiled to WASM — <code>orbit-fountain</code> with LDPC precoding</p>
+<p class="badge">Rust compiled to WASM — <code>orbit-fountain</code> with LDPC + HDPC precoding</p>
 
 <label for="file">Pick a file:</label>
 <input type="file" id="file" disabled>
@@ -25,6 +27,7 @@
     <option value="1024">1024 B</option>
     <option value="4096" selected>4096 B</option>
     <option value="16384">16 KiB</option>
+    <option value="65536">64 KiB</option>
   </select>
 </p>
 <button id="run" disabled>Encode + decode</button>
@@ -33,8 +36,6 @@
 <pre id="out">—</pre>
 
 <script type="module">
-import init, { Fountain, Decoder } from "./pkg/orbit_wasm.js";
-
 const status = document.getElementById('status');
 const fileInput = document.getElementById('file');
 const runBtn = document.getElementById('run');
@@ -43,16 +44,40 @@ const lossLabel = document.getElementById('lossLabel');
 const symSize = document.getElementById('symSize');
 const out = document.getElementById('out');
 
+function setErr(msg) {
+  status.className = 'badge err';
+  status.textContent = msg;
+  fileInput.disabled = true;
+  runBtn.disabled = true;
+}
+
+// Surface anything that would otherwise fail silently (blank page).
+window.addEventListener('error', (e) => {
+  status.className = 'badge err';
+  status.textContent = 'Unexpected error: ' + (e.message || e.type);
+});
+window.addEventListener('unhandledrejection', (e) => {
+  status.className = 'badge err';
+  status.textContent = 'Unhandled error: ' + e.reason;
+});
+
 loss.addEventListener('input', () => lossLabel.textContent = loss.value + '%');
 
 async function initApp() {
   try {
-    await init({ module_or_path: "./pkg/orbit_wasm_bg.wasm" });
+    // Dynamic import: if the WASM glue is missing (wrong path / not deployed)
+    // we can show a readable error instead of a silent white page.
+    const wasm = await import("../ts/pkg/orbit_wasm.js");
+    const wasmUrl = new URL("../ts/pkg/orbit_wasm_bg.wasm", import.meta.url).href;
+    await wasm.init({ module_or_path: wasmUrl });
+    window.Fountain = wasm.Fountain;
+    window.Decoder = wasm.Decoder;
     fileInput.disabled = false;
     runBtn.disabled = false;
+    status.className = 'badge ok';
     status.textContent = 'WASM ready. Pick a file.';
   } catch (e) {
-    status.textContent = 'WASM failed to load: ' + e;
+    setErr('WASM failed to load: ' + (e.message || e) + ' — the wasm bundle (ts/pkg) must be built and deployed.');
   }
 }
 
@@ -61,36 +86,40 @@ function hex(buf) {
 }
 
 runBtn.addEventListener('click', async () => {
-  const file = fileInput.files[0];
-  if (!file) { out.textContent = 'Pick a file first.'; return; }
-  const payload = new Uint8Array(await file.arrayBuffer());
-  const symbolSize = parseInt(symSize.value, 10);
-  const dropRate = parseInt(loss.value, 10) / 100;
+  try {
+    const file = fileInput.files[0];
+    if (!file) { out.textContent = 'Pick a file first.'; return; }
+    const payload = new Uint8Array(await file.arrayBuffer());
+    const symbolSize = parseInt(symSize.value, 10);
+    const dropRate = parseInt(loss.value, 10) / 100;
 
-  const f = new Fountain(payload, symbolSize);
-  const k = f.k(), l = f.l();
+    const f = new window.Fountain(payload, symbolSize);
+    const k = f.k(), l = f.l();
 
-  // Emit enough symbols to survive the simulated loss; lost ones never reach the decoder.
-  const need = Math.ceil(l * (1 + dropRate * 1.5)) + 10;
-  const d = new Decoder(f.payloadLen(), f.symbolSize(), k, f.checksumHex());
-  let sent = 0, fed = 0;
-  for (let esi = 0; esi < need; esi++) {
-    if (Math.random() < dropRate) continue; // simulate loss: symbol never sent
-    sent++;
-    const sym = f.encodeSymbol(esi);
-    fed++;
-    if (d.addSymbol(esi, sym)) break;
+    // Emit enough symbols to survive the simulated loss; lost ones never reach the decoder.
+    const need = Math.ceil(l * (1 + dropRate * 1.5)) + 10;
+    const d = new window.Decoder(f.payloadLen(), f.symbolSize(), k, f.checksumHex());
+    let sent = 0, fed = 0;
+    for (let esi = 0; esi < need; esi++) {
+      if (Math.random() < dropRate) continue; // simulate loss: symbol never sent
+      sent++;
+      const sym = f.encodeSymbol(esi);
+      fed++;
+      if (d.addSymbol(esi, sym)) break;
+    }
+
+    const rec = d.reconstruct();
+    const ok = rec.length === payload.length && hex(rec).startsWith(hex(payload.subarray(0, 256)));
+
+    out.textContent =
+      `payload:    ${payload.length.toLocaleString()} B (K=${k}, L=${l})\n` +
+      `loss:       ${dropRate * 100}%\n` +
+      `symbols:    sent ${sent} · fed ${fed} (overhead x${(fed / k).toFixed(3)})\n` +
+      `decoded:    ${rec.length.toLocaleString()} B in ${d.received()} symbols\n` +
+      `checksum:   ${f.checksumHex()} — ${ok ? 'MATCH ✓' : 'MISMATCH ✗'}`;
+  } catch (e) {
+    out.textContent = 'Error: ' + (e.message || e);
   }
-
-  const rec = d.reconstruct();
-  const ok = rec.length === payload.length && hex(rec).startsWith(hex(payload.subarray(0, 256)));
-
-  out.textContent =
-    `payload:    ${payload.length.toLocaleString()} B (K=${k}, L=${l})\n` +
-    `loss:       ${dropRate * 100}%\n` +
-    `symbols:    sent ${sent} · fed ${fed} (overhead x${(fed / k).toFixed(3)})\n` +
-    `decoded:    ${rec.length.toLocaleString()} B in ${d.received()} symbols\n` +
-    `checksum:   ${f.checksumHex()} — ${ok ? 'MATCH ✓' : 'MISMATCH ✗'}`;
 });
 
 initApp();
