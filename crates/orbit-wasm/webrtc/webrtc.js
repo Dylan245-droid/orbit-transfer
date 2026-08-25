@@ -236,6 +236,7 @@ export class HostSession {
       reliable: opts.reliable ?? true,
       maxRetransmits: opts.maxRetransmits,
       loopback: opts.loopback ?? true,
+      filename: opts.filename,
       onLog: opts.onLog ?? (() => {}),
     };
     this.pc = null;

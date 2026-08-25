@@ -129,7 +129,7 @@ try {
   });
 
   // Host (sender): create offer, publish, wait for the guest's answer, send.
-  const host = new HostSession({ reliable: true, onLog: (m) => line("H " + m) });
+  const host = new HostSession({ reliable: true, filename: "live.mp4", onLog: (m) => line("H " + m) });
   const offer = await host.createOffer();
   await signalingPutOffer(roomId, offer);
   const answer = await pollAnswer(roomId);
@@ -140,6 +140,11 @@ try {
   const ok =
     result && result.ok && result.payload.length === payload.length &&
     result.payload.every((b, i) => b === payload[i]);
+  const nameOk = result?.meta?.filename === "live.mp4";
+  if (!nameOk) {
+    console.error(`FAILED: filename lost, got '${result?.meta?.filename}' expected 'live.mp4'`);
+    process.exit(1);
+  }
 
   console.log(`guest fed ${result?.fed} · overhead x${(result?.fed / result?.meta.k).toFixed(3)} · dropped ${result?.dropped} · ok=${!!ok}`);
   if (!ok) {
