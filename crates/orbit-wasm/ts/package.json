@@ -40,7 +40,7 @@
   ],
   "sideEffects": false,
   "scripts": {
-    "build:wasm": "wasm-pack build .. --target web --out-dir ts/pkg --out-name orbit_wasm",
+    "build:wasm": "wasm-pack build .. --target web --out-dir ts/pkg --out-name orbit_wasm && node -e \"require('fs').rmSync('pkg/.gitignore', { force: true })\"",
     "build:ts": "tsc -p tsconfig.json",
     "build": "npm run build:wasm && npm run build:ts",
     "demo:webrtc": "node ../webrtc/serve.mjs",
