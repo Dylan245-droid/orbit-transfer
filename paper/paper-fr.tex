@@ -245,7 +245,11 @@ Le décodeur construit le graphe de décodage sur les $L$ entrées précodées. 
 amorce le processus d'épluchage avec les $S$ équations de contrôle LDPC et les
 $H$ équations HDPC, et itère les
 équations de degré un : résoudre un symbole le XOR-e hors de chaque équation
-qui le mentionne, et une équation de degré un se résout immédiatement. Les
+qui le mentionne, et une équation de degré un se résout immédiatement. L'étape
+d'épluchage est indexée---un index inverse entrée-à-équation fait qu'un symbole
+résolu ne touche que les équations qui le mentionnent ($O(\text{degré})$ par
+symbole) au lieu de parcourir toutes les équations actives, ce qui maintient le
+décodeur WASM du navigateur rapide à grand $K$. Les
 équations HDPC denses se résolvent en dernier, garantissant que le graphe se
 termine. La reconstruction se termine lorsque les $K+S+H$ entrées sont
 résolues ; la charge
@@ -339,7 +343,7 @@ charge utile : le décodeur termine exactement à $K$ symboles (surcoût $1{,}00
 Sous perte simulée de $5\%$, le surcoût est d'environ $1{,}1\times L$, bien dans
 la garantie Raptor. Le débit d'encodage dépasse $3$\,Gbit/s pour une charge
 utile de 64\,Mio ; le décodage de la même charge utile se termine en environ
-$0{,}2$\,s.
+$0{,}13$\,s.
 
 \subsection{Agrégation}
 \begin{table}[!t]
@@ -452,7 +456,12 @@ résoudre, laissant l'agent ICE sans paire de candidats (bloqué dans l'état
 d'un candidat loopback pointant vers le port du pair rétablit la connectivité
 entre onglets de la même machine. Le pont est validé de bout en bout dans le
 navigateur et par des tests d'intégration sur canal simulé (y compris le flux
-automatique par lien partageable).
+automatique par lien partageable). La version actuelle repose sur des candidats
+ICE hôtes uniquement, si bien que le flux automatisé est validé sur une seule
+machine (loopback) et sur un LAN ; le pair-à-pair sur Internet public exige
+STUN/TURN, ce qui---avec un transport par datagrammes QUIC/WebTransport comme
+alternative au canal SCTP offrant un débit supérieur, et un basculement vers le
+relais quand la connectivité directe échoue---fait l'objet de travaux en cours.
 
 \begin{thebibliography}{1}
 \bibitem{byers1998digital}

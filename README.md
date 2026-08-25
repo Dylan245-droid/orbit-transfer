@@ -158,8 +158,8 @@ Example output (64 MiB payload, 4 KiB symbols):
 
 | Payload | Symbol size | Loss | Encode | Decode | Symbols used |
 |---------|-------------|------|--------|--------|--------------|
-| 64 MiB | 4 KiB | 0% | ~3 Gb/s | ~0.2 s | 16384 / 24586 (x1.000) |
-| 64 MiB | 4 KiB | 5% | ~3 Gb/s | ~0.2 s | ~1.1x L symbols |
+| 64 MiB | 4 KiB | 0% | ~3 Gb/s | ~0.13 s | 16384 / 24586 (x1.000) |
+| 64 MiB | 4 KiB | 5% | ~3 Gb/s | ~0.13 s | ~1.1x L symbols |
 
 ## Real-World Applications
 

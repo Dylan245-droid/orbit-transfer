@@ -209,7 +209,11 @@ without a shared dictionary.
 The decoder builds the decoding graph over the $L$ precoded inputs. It seeds
 the peeling process with the $S$ LDPC and $H$ HDPC check equations and iterates
 degree-one equations: resolving a symbol XORs it out of every equation that
-mentions it, and a degree-one equation resolves immediately. The dense HDPC
+mentions it, and a degree-one equation resolves immediately. The peeling step
+is index-based---a reverse input-to-equation index lets each resolved symbol
+touch only the equations that mention it ($O(\text{degree})$ per symbol)
+instead of scanning all active equations, which keeps the browser WASM decoder
+fast at high $K$. The dense HDPC
 equations resolve last, guaranteeing the graph completes. Reconstruction
 completes once all $K+S+H$ inputs are resolved; the payload is then verified
 against the XXH3 checksum carried in \textsc{Meta}. Duplicate and out-of-order
@@ -293,7 +297,7 @@ In the lossless case the systematic phase alone reconstructs the payload:
 the decoder finishes at exactly $K$ symbols (overhead $1.000$). Under simulated
 $5\%$ loss the overhead is $\approx 1.1\times L$, well inside the Raptor
 guarantee. Encode throughput exceeds $3$\,Gb/s for a 64\,MiB payload; decode of
-the same payload completes in $\approx 0.2$\,s.
+the same payload completes in $\approx 0.13$\,s.
 
 \subsection{Aggregation}
 \begin{table}[!t]
@@ -399,7 +403,12 @@ ICE agent with no candidate pair (stuck in the ``new'' state); since candidate
 ports are not masked, adding an explicit loopback candidate pointing at the
 peer's port restores connectivity between tabs on the same host. The bridge is
 validated end-to-end in the browser and through mocked-channel integration
-tests (including the automated share-link flow).
+tests (including the automated share-link flow). The current build uses
+host-only ICE candidates, so the automated flow is validated on a single host
+(loopback) and over a LAN; public-internet peer-to-peer requires STUN/TURN,
+which---together with a QUIC/WebTransport datagram transport as a higher
+throughput alternative to the SCTP data channel, and a relay fallback when
+direct connectivity fails---is the subject of ongoing work.
 
 \begin{thebibliography}{1}
 \bibitem{byers1998digital}
