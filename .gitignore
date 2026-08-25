@@ -16,3 +16,6 @@ paper/*.log
 # Editor / OS
 .DS_Store
 Thumbs.db
+
+# Vercel CLI local state
+.vercel/

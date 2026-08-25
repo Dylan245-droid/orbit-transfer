@@ -1,6 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "functions": {
-    "api/rooms/[[...slug]].js": { "maxDuration": 10 }
-  }
+  "rewrites": [
+    { "source": "/api/rooms/:path*", "destination": "/api/rooms?path=:path*" }
+  ]
 }
