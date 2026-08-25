@@ -23,25 +23,29 @@
 <h1>Orbit-Transfer · WebRTC browser-to-browser</h1>
 <p class="badge">Fountain codes in WASM over a WebRTC data channel. The sender drags &amp; drops a file and gets a <b>shareable link</b>; the receiver opens it and the transfer runs P2P with no central server (only a tiny signaling room to exchange the SDP). Any file type works — the codec treats it as raw bytes and reconstructs them exactly.</p>
 
-<p><label><input type="checkbox" id="loopback" checked> Same machine — add loopback candidates (workaround for mDNS-masked host candidates)</label></p>
-<p>
-  <label>Symbol size:
-    <select id="symSize">
-      <option value="auto" selected>auto (recommended)</option>
-      <option value="1024">1024 B</option>
-      <option value="4096">4096 B</option>
-      <option value="16384">16 KiB</option>
-      <option value="65536">64 KiB</option>
-    </select>
-  </label>
-  <label>Channel: <select id="reliable">
-    <option value="reliable" selected>reliable</option>
-    <option value="unreliable">unreliable (SCTP, real loss)</option>
-  </select></label>
-  <label>Simulated loss:
-    <input type="range" id="loss" min="0" max="40" value="10"> <span id="lossLabel">10%</span>
-  </label>
-</p>
+<details>
+  <summary>Transfer options &amp; how it works</summary>
+  <p class="badge" style="margin-top:8px">The codec is <b>rateless</b>: the receiver rebuilds the file from any K+ε of the emitted symbols, in any order. These options stress-test that property.</p>
+  <p><label><input type="checkbox" id="loopback" checked> <b>Same machine</b> — add loopback candidates (Chrome masks host IPs behind mDNS names; ports are not masked, so a 127.0.0.1 candidate with the peer's port restores two-tab connectivity)</label></p>
+  <p>
+    <label title="Bytes per fountain symbol — sets K (number of source blocks). Fewer, larger symbols decode faster in the browser.">Symbol size:
+      <select id="symSize">
+        <option value="auto" selected>auto (recommended)</option>
+        <option value="1024">1024 B</option>
+        <option value="4096">4096 B</option>
+        <option value="16384">16 KiB</option>
+        <option value="65536">64 KiB</option>
+      </select>
+    </label>
+    <label title="reliable = ordered delivery; unreliable SCTP (maxRetransmits:1) = real packet loss on the wire, absorbed by the code.">Channel: <select id="reliable">
+      <option value="reliable" selected>reliable</option>
+      <option value="unreliable">unreliable (SCTP, real loss)</option>
+    </select></label>
+    <label title="The receiver actually discards this % of incoming symbols before decoding — the rateless code still reconstructs the file.">Simulated loss:
+      <input type="range" id="loss" min="0" max="40" value="10"> <span id="lossLabel">10%</span>
+    </label>
+  </p>
+</details>
 
 <div id="hostBox" class="box">
   <h2>Sender</h2>
