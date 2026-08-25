@@ -35,8 +35,9 @@ Email : danielebang59@gmail.com}}
 Ce papier présente Orbit-Transfer, un système de transfert de fichiers hybride
 pair-à-pair et relais périphériques qui agrège la capacité de plusieurs chemins
 réseau contraints à l'aide de codes fontaines rateless. Une charge utile est
-découpée en $K$ symboles source, augmentés de $S$ symboles de contrôle de
-précodage LDPC, et l'émetteur produit un flux illimité de symboles encodés ; le
+découpée en $K$ symboles source, augmentés de $S$ contrôles de précodage LDPC
+et de $H$ contrôles HDPC de type RaptorQ, et l'émetteur produit un flux
+illimité de symboles encodés ; le
 récepteur reconstruit la charge utile à partir de n'importe quels
 $K+\varepsilon$ symboles distincts, sans demande de retransmission. Comme les
 symboles de fontaine sont interchangeables et indépendants de l'ordre,
@@ -76,8 +77,9 @@ disponible et laisser le récepteur assembler la charge utile à partir de ce qu
 arrive.
 
 Orbit-Transfer exploite exactement cette propriété. L'émetteur découpe un
-fichier en $K$ blocs source, applique un précodage LDPC de type
-Raptor~\cite{shokrollahi2006raptor} pour obtenir $L=K+S$ entrées précodées, et
+fichier en $K$ blocs source, applique un précodage de type Raptor---LDPC
+puis HDPC de type RaptorQ~\cite{shokrollahi2006raptor,rfc6330}---pour obtenir
+$L=K+S+H$ entrées précodées, et
 émet un flux \emph{illimité} de symboles distincts. Le récepteur n'a besoin que
 de $K+\varepsilon$ symboles \emph{quelconques} pour reconstruire le fichier ;
 il ne demande jamais un bloc manquant. L'émetteur continue d'émettre jusqu'à ce
@@ -86,7 +88,8 @@ réordonnancement ou toute défaillance de chemin est absorbé automatiquement.
 
 La conséquence pratique est un ordonnanceur multi-chemins très simple :
 répartir les symboles en tourniquet sur $N$ relais périphériques (et
-optionnellement un canal TCP pair-à-pair direct), désactiver les chemins en
+optionnellement un canal pair-à-pair direct sur TCP ou QUIC), désactiver les
+chemins en
 panne, et compter sur la propriété rateless pour terminer. Comme les relais
 n'ont pas besoin de se coordonner, la bande passante s'agrège linéairement :
 $N$ relais de capacité $C$ délivrent jusqu'à $N\cdot C$, à condition que chaque
@@ -99,8 +102,8 @@ compact, un relais périphérique à salons avec mise en tampon pré-récepteur 
 contre-pression, un ordonnanceur multi-chemins, et un chiffrement AEAD par
 symbole (\S\ref{sec:arch}).
 \item La conception du codec fontaine---phase systématique, distribution
-Robust Soliton, précodage LDPC et décodage par épluchage---ainsi que ses
-paramètres (\S\ref{sec:codec}).
+Robust Soliton, précodage LDPC et HDPC (type Raptor/RaptorQ) et décodage par
+épluchage---ainsi que ses paramètres (\S\ref{sec:codec}).
 \item Une étude empirique de l'agrégation : deux relais délivrent $2{,}2\times$
 et trois relais $3{,}2\times$ le débit d'un relais unique limité, et le codec
 termine avec un surcoût quasi nul dans la phase systématique
@@ -136,8 +139,9 @@ signale \textsc{Ready} une fois le décodage terminé.}
 Le système (Fig.~\ref{fig:system}) comprend trois rôles : un \emph{émetteur},
 un ou plusieurs \emph{relais} et un \emph{récepteur}. L'émetteur se connecte à
 chaque relais via WebSocket et, lorsqu'un chemin direct est annoncé, au
-récepteur via TCP brut. Les deux parties partagent un identifiant de session
-sur 64 bits.
+récepteur via TCP brut ou QUIC (sélectionnés d'après le préfixe
+\texttt{quic://} de l'adresse annoncée). Les deux parties partagent un
+identifiant de session sur 64 bits.
 
 \subsection{Protocole}
 Les trames binaires transitent par WebSocket (liens relais) ou TCP brut (P2P
@@ -194,8 +198,11 @@ est redistribuée automatiquement.
 La session récepteur lance une tâche de lecture par relais qui réémet les
 trames sur un canal unique, de sorte qu'une boucle de décodage à base de
 \texttt{select} fusionne tous les chemins (et le canal direct optionnel) en un
-flux ordonné. Après décodage, elle envoie \textsc{Ready} sur chaque lien puis
-\emph{vidange} chaque socket jusqu'à EOF avant de fermer---fermer avec des
+flux ordonné. Le chemin direct passe par TCP brut par défaut et par
+\textbf{QUIC} lorsque le récepteur annonce une adresse \texttt{quic://}
+(l'émetteur choisit le transport d'après le préfixe) ; les deux portent le même
+encadrement binaire. Après décodage, elle envoie \textsc{Ready} sur chaque lien
+puis \emph{vidange} chaque socket jusqu'à EOF avant de fermer---fermer avec des
 données non lues émettrait une réinitialisation TCP et purgerait le
 \textsc{Ready} en vol.
 
@@ -210,9 +217,19 @@ S = \max\!\bigl(2,\ \lfloor K/100\rfloor + 10\bigr)
 \end{equation}
 symboles de contrôle ; le contrôle $i$ est le XOR des symboles source dont
 l'indice est congru à $i$ modulo $S$, combiné aux sources $i\bmod K$ et
-$(i{+}1)\bmod K$. Les $L=K+S$ symboles précodés sont les entrées d'un encodeur
-LT~\cite{luby2002lt} qui tire son degré de la distribution Robust Soliton avec
-$c=0{,}1$, $\delta=0{,}05$ et $R=c\sqrt{K}\ln(K/\delta)$.
+$(i{+}1)\bmod K$. Une couche HDPC de type RaptorQ~\cite{rfc6330} ajoute ensuite
+$H$ contrôles haute densité, où $H$ est le plus petit entier tel que
+\begin{equation}
+\binom{H}{\lfloor H/2\rfloor} \ge K + S,
+\end{equation}
+et le contrôle $i$ XOR-e un sous-ensemble pseudo-aléatoire dense (environ la
+moitié) des $K+S$ entrées précodées, ensemencé de manière déterministe depuis
+l'indice du contrôle. Les $L=K+S+H$ symboles précodés sont les entrées d'un
+encodeur LT~\cite{luby2002lt} qui tire son degré de la distribution Robust
+Soliton avec $c=0{,}1$, $\delta=0{,}05$ et $R=c\sqrt{K}\ln(K/\delta)$. Les
+contrôles HDPC servent de filet de sécurité au graphe de décodage : à faible
+$K$, ils laissent la reconstruction se terminer près de $K+\varepsilon$ au lieu
+de caler sur le graphe LDPC plus épars.
 
 Le code est \emph{systématique} : pour esi $<K$, l'encodeur émet directement le
 symbole source brut, si bien que dans le cas sans perte le récepteur
@@ -225,10 +242,13 @@ partagé.
 
 \subsection{Décodage}
 Le décodeur construit le graphe de décodage sur les $L$ entrées précodées. Il
-amorce le processus d'épluchage avec les $S$ équations de contrôle et itère les
+amorce le processus d'épluchage avec les $S$ équations de contrôle LDPC et les
+$H$ équations HDPC, et itère les
 équations de degré un : résoudre un symbole le XOR-e hors de chaque équation
-qui le mentionne, et une équation de degré un se résout immédiatement. La
-reconstruction se termine lorsque les $K+S$ entrées sont résolues ; la charge
+qui le mentionne, et une équation de degré un se résout immédiatement. Les
+équations HDPC denses se résolvent en dernier, garantissant que le graphe se
+termine. La reconstruction se termine lorsque les $K+S+H$ entrées sont
+résolues ; la charge
 utile est ensuite vérifiée contre la somme de contrôle XXH3 portée par
 \textsc{Meta}. Les doublons et les symboles hors ordre sont inoffensifs (ils
 sont dédupliqués par esi), ce qui est la propriété qui rend l'agrégation
@@ -383,7 +403,8 @@ accessible~\cite{mackay2005fountain}. Les codes Raptor~\cite{shokrollahi2006rapt
 et RaptorQ~\cite{rfc6330} ajoutent un précodage fixe pour ramener le surcoût de
 décodage à quelques pour cent et sont utilisés dans les normes de diffusion
 3GPP et de livraison fiable. Notre codec suit la recette Raptor (LT sur un
-précodage LDPC, phase systématique) à plus petite échelle et avec une graine de
+précodage LDPC complété d'une couche HDPC de type RaptorQ, phase systématique)
+à plus petite échelle et avec une graine de
 voisins déterministe et reproductible.
 
 Le transport multi-chemins a été normalisé sous la forme de
@@ -409,23 +430,29 @@ cas sans perte, et (ii) les limiteurs de débit doivent reposer sur des sommeils
 parkés et être auto-correctifs pour maintenir des chemins indépendants
 uniformes sous concurrence.
 
-Les travaux en cours et futurs incluent des contrôles HDPC de type RaptorQ par-
-dessus le précodage LDPC pour un surcoût quasi optimal à faible $K$ ; et un
-chemin direct basé sur QUIC en alternative au TCP. Le relais est déjà
-agnostique au transport, et le protocole est assez compact pour transiter sur
-tout canal ordonné ou non.
+Les travaux en cours et futurs incluent l'extension du chemin direct au-delà de
+TCP et QUIC (déjà implémenté : le récepteur peut annoncer un écouteur
+\texttt{quic://} et l'émetteur choisit QUIC automatiquement, ce qui offre une
+connexion 0-RTT et la migration de connexion), et la poursuite du précodage de
+type RaptorQ vers un surcoût encore plus faible à très petit $K$. Le relais est
+déjà agnostique au transport, et le protocole est assez compact pour transiter
+sur tout canal ordonné ou non.
 
 En complément de la pile multi-chemins native, un pont WebRTC est livré avec le
 paquet WebAssembly : les transferts navigateur-à-navigateur s'exécutent sur un
-canal de données SCTP avec le même codec fontaine compilé en WASM, avec un
-échange manuel de SDP pour la signalisation. Une leçon pratique est ressortie
+canal de données SCTP avec le même codec fontaine compilé en WASM. La
+signalisation est automatisée via un minuscule salon en mémoire sur le serveur
+statique : l'émetteur glisse un fichier et obtient un lien partageable
+\texttt{?room=<id>}, le récepteur l'ouvre, et l'offre/réponse SDP transite par
+HTTP. Une leçon pratique est ressortie
 des tests navigateur : Chrome masque les candidats ICE hôtes derrière des noms
 mDNS (\texttt{*.local}) que certaines interfaces réseau ne peuvent pas
 résoudre, laissant l'agent ICE sans paire de candidats (bloqué dans l'état
 « new ») ; comme les ports des candidats ne sont pas masqués, l'ajout explicite
 d'un candidat loopback pointant vers le port du pair rétablit la connectivité
 entre onglets de la même machine. Le pont est validé de bout en bout dans le
-navigateur et par un test d'intégration sur canal simulé.
+navigateur et par des tests d'intégration sur canal simulé (y compris le flux
+automatique par lien partageable).
 
 \begin{thebibliography}{1}
 \bibitem{byers1998digital}

@@ -355,7 +355,8 @@ Luby~\cite{luby2002lt}; MacKay gives an accessible survey~\cite{mackay2005founta
 Raptor~\cite{shokrollahi2006raptor,rfc5053} and RaptorQ~\cite{rfc6330} codes add
 a fixed precode to reduce decoding overhead to a few percent and are used in
 3GPP broadcast and reliable delivery standards. Our codec follows the Raptor
-recipe (LT over an LDPC precode, systematic phase) at smaller scale and with a
+recipe (LT over an LDPC precode plus a RaptorQ-style HDPC layer, systematic
+phase) at smaller scale and with a
 deterministic, reproducible neighbor seed.
 
 Multipath transport has been standardized as
