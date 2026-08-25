@@ -4,6 +4,9 @@
 [![Docker](https://img.shields.io/docker/v/dylanondo/orbit-relay?label=docker)](https://hub.docker.com/r/dylanondo/orbit-relay)
 [![GitHub](https://img.shields.io/github/v/release/Dylan245-droid/orbit-transfer)](https://github.com/Dylan245-droid/orbit-transfer)
 
+**Live demo**: [fountain codec in the browser](https://dylan245-droid.github.io/orbit-transfer/demo/) ·
+[WebRTC browser-to-browser transfer](https://dylan245-droid.github.io/orbit-transfer/webrtc/)
+
 Hybrid P2P + edge-relay file transfer with **rateless fountain codes** (LT + LDPC + HDPC).
 
 Orbit-Transfer splits a file into K source blocks, adds S LDPC and H HDPC
