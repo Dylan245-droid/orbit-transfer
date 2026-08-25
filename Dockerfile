@@ -1,8 +1,9 @@
 # Orbit-Transfer edge relay — minimal container image.
 #
-#   docker build -t orbittransfer/relay .
-#   docker run --rm -p 9000:9000 orbittransfer/relay
+#   docker build -t dylanondo/orbit-relay .
+#   docker run --rm -p 9000:9000 dylanondo/orbit-relay
 #
+# Published on Docker Hub: docker.io/dylanondo/orbit-relay
 # The relay is transport-agnostic (routes sealed binary symbols over
 # WebSocket by session id); `--throttle-kbps` optionally simulates a
 # constrained uplink per connection.

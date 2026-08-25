@@ -1,12 +1,16 @@
 # Orbit-Transfer
 
-Hybrid P2P + edge-relay file transfer with **rateless fountain codes** (LT + LDPC).
+[![npm](https://img.shields.io/npm/v/orbit-transfer-wasm)](https://www.npmjs.com/package/orbit-transfer-wasm)
+[![Docker](https://img.shields.io/docker/v/dylanondo/orbit-relay?label=docker)](https://hub.docker.com/r/dylanondo/orbit-relay)
+[![GitHub](https://img.shields.io/github/v/release/Dylan245-droid/orbit-transfer)](https://github.com/Dylan245-droid/orbit-transfer)
 
-Orbit-Transfer splits a file into K source blocks, adds S LDPC precode checks,
-and emits an *unbounded* stream of encoded symbols. The receiver needs only
-K + ε *any* symbols to rebuild the file — no retransmission requests, no fixed
-overhead, no per-packet bookkeeping. The sender keeps emitting until the
-receiver says `READY`, so any loss rate is absorbed automatically.
+Hybrid P2P + edge-relay file transfer with **rateless fountain codes** (LT + LDPC + HDPC).
+
+Orbit-Transfer splits a file into K source blocks, adds S LDPC and H HDPC
+precode checks, and emits an *unbounded* stream of encoded symbols. The receiver
+needs only K + ε *any* symbols to rebuild the file — no retransmission requests,
+no fixed overhead, no per-packet bookkeeping. The sender keeps emitting until
+the receiver says `READY`, so any loss rate is absorbed automatically.
 
 ```
 Sender ──rateless symbols──▶ Relay(s) ──rateless symbols──▶ Receiver
@@ -25,6 +29,31 @@ Sender ──rateless symbols──▶ Relay(s) ──rateless symbols──▶ 
 | `orbit-relay` | Edge relay: room-based routing, pre-receiver buffering, async backpressure, byte/symbol counters |
 | `orbit-cli` | `orbit send`, `orbit receive`, `orbit relay` |
 | `orbit-wasm` | wasm-bindgen bindings + browser demo (`demo/index.html`) + TypeScript package (`ts/`) |
+
+## Install & deploy
+
+**Edge relay** (one binary, WebSocket, routes sealed symbols by session id):
+
+```sh
+docker run --rm -p 9000:9000 dylanondo/orbit-relay
+```
+
+**Browser codec** (fountain encode/decode in WASM + TypeScript):
+
+```sh
+npm install orbit-transfer-wasm
+```
+
+```ts
+import { loadOrbit, OrbitEncoder, OrbitDecoder } from "orbit-transfer-wasm";
+await loadOrbit();
+const encoder = new OrbitEncoder(payload, 4096);      // file bytes -> symbols
+const symbol = encoder.encodeSymbol(esi);             // rateless: any esi
+// send symbol to the peer over any channel (WebRTC, WebSocket, …)
+const decoder = new OrbitDecoder(payload.length, 4096, encoder.k, encoder.checksumHex);
+decoder.addSymbol(esi, symbol);
+if (decoder.isComplete) decoder.reconstruct();        // exact payload back
+```
 
 ## Quick start
 
