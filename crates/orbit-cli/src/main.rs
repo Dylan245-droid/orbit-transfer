@@ -54,6 +54,9 @@ enum Command {
         /// Use QUIC (instead of TCP) for the direct P2P path
         #[arg(long)]
         quic: bool,
+        /// Disable the P2P direct path entirely (relay-only transfer)
+        #[arg(long)]
+        no_p2p: bool,
     },
     /// Run a relay server
     Relay {
@@ -113,6 +116,7 @@ async fn main() -> anyhow::Result<()> {
             secret,
             listen,
             quic,
+            no_p2p,
         } => {
             println!(
                 "receiving session {session} via [{}]{}{}",
@@ -120,11 +124,15 @@ async fn main() -> anyhow::Result<()> {
                 if secret.is_some() { " (encrypted)" } else { "" },
                 if quic { " (QUIC direct path)" } else { "" }
             );
-            let listen_addr = match (listen, quic) {
-                (Some(addr), true) => Some(format!("quic://{addr}")),
-                (Some(addr), false) => Some(addr),
-                (None, true) => Some("quic://127.0.0.1:0".to_string()),
-                (None, false) => Some("127.0.0.1:0".to_string()),
+            let listen_addr = if no_p2p {
+                None
+            } else {
+                match (listen, quic) {
+                    (Some(addr), true) => Some(format!("quic://{addr}")),
+                    (Some(addr), false) => Some(addr),
+                    (None, true) => Some("quic://127.0.0.1:0".to_string()),
+                    (None, false) => Some("127.0.0.1:0".to_string()),
+                }
             };
             let mut receiver =
                 ReceiverSession::connect(&relay, session, listen_addr, secret).await?;
