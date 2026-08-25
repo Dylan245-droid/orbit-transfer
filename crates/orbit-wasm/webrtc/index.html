@@ -12,6 +12,8 @@
   pre { background: #f4f4f4; border-radius: 8px; padding: 10px; overflow-x: auto; max-height: 240px; overflow-y: auto; font-size: 12px; }
   button { padding: 8px 14px; border-radius: 8px; border: 1px solid #999; background: #eee; cursor: pointer; }
   button:disabled { opacity: .5; cursor: not-allowed; }
+  a.btn { display: inline-block; padding: 8px 14px; border-radius: 8px; border: 1px solid #999; background: #2563eb; color: #fff; text-decoration: none; cursor: pointer; font-size: 14px; }
+  a.btn:hover { background: #1d4ed8; }
   label { display: inline-block; margin-right: 12px; }
   .box { border: 1px solid #ddd; border-radius: 10px; padding: 14px; margin: 10px 0; }
   .link { font: 12px/1.4 monospace; background: #eef; border: 1px solid #ccc; border-radius: 6px; padding: 8px; word-break: break-all; }
@@ -72,6 +74,8 @@
 <div id="result" hidden>
   <h2>Result</h2>
   <pre id="resultText"></pre>
+  <p><a id="downloadLink" class="btn" download>Download file</a></p>
+  <div id="preview"></div>
 </div>
 
 <details>
@@ -114,6 +118,65 @@ function showResult(meta, payload, ok, received, dropped, fed) {
     `received:    ${received} symbols (dropped ${dropped} simulated)\n` +
     `fed:         ${fed} (overhead x${(fed / meta.k).toFixed(3)})\n` +
     `decoded:     ${payload.length.toLocaleString()} B — ${ok ? "payload matches (XXH3 + byte compare)" : "MISMATCH"}`;
+
+  // Give the receiver the actual file back + a preview when the type allows.
+  if (ok) {
+    const name = meta.filename || "transfer.bin";
+    const type = mimeFromName(name);
+    const url = URL.createObjectURL(new Blob([payload], { type }));
+    const dl = $("downloadLink");
+    dl.href = url;
+    dl.download = name;
+    dl.textContent = "Download " + name;
+    dl.hidden = false;
+    renderPreview($("preview"), url, name);
+  }
+}
+
+function mimeFromName(name) {
+  const ext = name.split(".").pop().toLowerCase();
+  return (
+    { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", svg: "image/svg+xml", bmp: "image/bmp" }[ext] ??
+    { mp4: "video/mp4", webm: "video/webm", ogv: "video/ogg", mov: "video/quicktime", mkv: "video/x-matroska" }[ext] ??
+    { mp3: "audio/mpeg", wav: "audio/wav", ogg: "audio/ogg", flac: "audio/flac", m4a: "audio/mp4" }[ext] ??
+    { pdf: "application/pdf", txt: "text/plain", json: "application/json" }[ext] ??
+    "application/octet-stream"
+  );
+}
+
+function renderPreview(el, url, name) {
+  el.innerHTML = "";
+  if (/\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(name)) {
+    const img = document.createElement("img");
+    img.src = url;
+    img.style.maxWidth = "100%";
+    img.style.maxHeight = "400px";
+    img.style.border = "1px solid #ddd";
+    img.style.borderRadius = "8px";
+    el.appendChild(img);
+  } else if (/\.(mp4|webm|ogv|mov|mkv)$/i.test(name)) {
+    const v = document.createElement("video");
+    v.src = url;
+    v.controls = true;
+    v.style.maxWidth = "100%";
+    v.style.maxHeight = "400px";
+    v.style.border = "1px solid #ddd";
+    v.style.borderRadius = "8px";
+    el.appendChild(v);
+  } else if (/\.(mp3|wav|ogg|flac|m4a)$/i.test(name)) {
+    const a = document.createElement("audio");
+    a.src = url;
+    a.controls = true;
+    el.appendChild(a);
+  } else if (/\.pdf$/i.test(name)) {
+    const f = document.createElement("iframe");
+    f.src = url;
+    f.style.width = "100%";
+    f.style.height = "400px";
+    f.style.border = "1px solid #ddd";
+    f.style.borderRadius = "8px";
+    el.appendChild(f);
+  }
 }
 
 const loss = $("loss");
