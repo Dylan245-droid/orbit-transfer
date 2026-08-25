@@ -317,9 +317,11 @@ export class HostSession {
     const enc = new TextEncoder();
     const meta = new Uint8Array([FRAME_META, ...enc.encode(JSON.stringify(this.meta))]);
     await sendChunked(this.channel, meta);
-    this.opts.onLog(`sending ${this.meta.payloadLength} B (K=${k}, cap ${hardCap}, loss ${Math.round(loss * 100)}%)`);
+    this.opts.onLog(`sending ${this.meta.payloadLength} B (K=${k}, sym ${encoder.symbolSize()}, cap ${hardCap}, loss ${Math.round(loss * 100)}%)`);
 
     const start = performance.now();
+    let lastLog = start;
+    let lastSent = 0;
     for (let esi = 0; esi < hardCap && !this.done; esi++) {
       const sym = encoder.encodeSymbol(esi);
       const frame = new Uint8Array(5 + sym.length);
@@ -329,8 +331,13 @@ export class HostSession {
       await sendChunked(this.channel, frame);
       this.sent += 1;
       if (this.sent % 500 === 0) {
-        const mbps = (this.meta.payloadLength / 1048576) / ((performance.now() - start) / 1000);
-        this.opts.onLog(`sent ${this.sent} symbols (${mbps.toFixed(2)} MiB/s)`);
+        const now = performance.now();
+        const dt = (now - lastLog) / 1000;
+        const instant = ((this.sent - lastSent) * (5 + sym.length)) / 1048576 / dt;
+        const avg = (this.meta.payloadLength / 1048576) / ((now - start) / 1000);
+        lastLog = now;
+        lastSent = this.sent;
+        this.opts.onLog(`sent ${this.sent} symbols (inst ${instant.toFixed(2)} MiB/s · avg ${avg.toFixed(2)})`);
       }
     }
     const doneMsg = this.done

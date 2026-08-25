@@ -27,9 +27,11 @@
 <p>
   <label>Symbol size:
     <select id="symSize">
+      <option value="auto" selected>auto (recommended)</option>
       <option value="1024">1024 B</option>
-      <option value="4096" selected>4096 B</option>
+      <option value="4096">4096 B</option>
       <option value="16384">16 KiB</option>
+      <option value="65536">64 KiB</option>
     </select>
   </label>
   <label>Channel: <select id="reliable">
@@ -120,13 +122,22 @@ async function pickPayload() {
   return { payload: new Uint8Array(await file.arrayBuffer()), name: file.name };
 }
 
+// Picks a symbol size that keeps K <= ~4096 for fast in-browser decoding,
+// regardless of file size (a 136 MiB file at 4 KiB symbols -> K=35000, which
+// makes the WASM peeling decoder the bottleneck and throttles the transfer).
+function autoSymbolSize(len) {
+  const target = Math.max(1, Math.ceil(len / 4096));
+  const size = Math.pow(2, Math.ceil(Math.log2(target)));
+  return Math.min(Math.max(size, 4096), 1024 * 1024);
+}
+
 function settings() {
   return {
     reliable: $("reliable").value === "reliable",
     maxRetransmits: 1,
     loopback: $("loopback").checked,
     loss: parseInt($("loss").value, 10) / 100,
-    symbolSize: parseInt($("symSize").value, 10),
+    symbolSize: $("symSize").value,
   };
 }
 
@@ -158,9 +169,11 @@ $("startHost").addEventListener("click", async () => {
   try {
     const { payload, name } = await pickPayload();
     const s = settings();
+    const symbolSize = s.symbolSize === "auto" ? autoSymbolSize(payload.length) : parseInt(s.symbolSize, 10);
+    line(`symbol size: ${symbolSize} B (K=${Math.ceil(payload.length / symbolSize)})`);
     $("startHost").disabled = true;
     $("hostStatus").textContent = "creating room…";
-    const share = await hostShare(payload, s.symbolSize, {
+    const share = await hostShare(payload, symbolSize, {
       ...s,
       filename: name,
       onLog: line,
@@ -231,7 +244,8 @@ $("manualConnect").addEventListener("click", async () => {
   try {
     const { payload, s } = await pickPayload();
     if (!host) throw new Error("create an offer first");
-    await host.acceptAnswer($("answerIn").value, payload, s.symbolSize, s.loss);
+    const symbolSize = s.symbolSize === "auto" ? autoSymbolSize(payload.length) : parseInt(s.symbolSize, 10);
+    await host.acceptAnswer($("answerIn").value, payload, symbolSize, s.loss);
   } catch (e) { line("connect error: " + e); }
 });
 $("manualAnswer").addEventListener("click", async () => {
