@@ -131,11 +131,30 @@ function settings() {
 }
 
 $("file").addEventListener("change", () => {
-  $("startHost").disabled = !$("file").files[0];
+  $("startHost").disabled = !$("file").files[0] || !signalingOk;
 });
+
+// Probe the signaling API once. Static hosts (e.g. GitHub Pages) cannot run
+// the room server, so the automated share-link flow is disabled there and the
+// manual SDP mode remains the fallback.
+let signalingOk = true;
+(async () => {
+  try {
+    const r = await fetch("/api/rooms", { method: "POST" });
+    signalingOk = r.ok;
+  } catch {
+    signalingOk = false;
+  }
+  if (!signalingOk) {
+    line("signaling API unavailable on this host — using manual SDP mode");
+    $("startHost").disabled = true;
+    $("guestStatus") && ($("guestStatus").textContent = "signaling unavailable — use manual mode");
+  }
+})();
 
 // ---- Automated share-link flow -------------------------------------------------
 $("startHost").addEventListener("click", async () => {
+  if (!signalingOk) { line("automated signaling unavailable — use manual mode below"); return; }
   try {
     const { payload, name } = await pickPayload();
     const s = settings();
@@ -170,6 +189,7 @@ if (roomParam) {
   $("guestBox").hidden = false;
   $("roomId").textContent = roomParam;
   $("startGuest").addEventListener("click", async () => {
+    if (!signalingOk) { line("automated signaling unavailable on this host"); return; }
     try {
       $("startGuest").disabled = true;
       $("guestStatus").textContent = "joining room " + roomParam + "…";
