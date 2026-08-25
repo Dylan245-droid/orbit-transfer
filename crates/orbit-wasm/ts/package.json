@@ -18,11 +18,11 @@
   "author": "Dylan Ondo",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/REPLACE-ME/orbit-transfer.git"
+    "url": "git+https://github.com/Dylan245-droid/orbit-transfer.git"
   },
-  "homepage": "https://github.com/REPLACE-ME/orbit-transfer",
+  "homepage": "https://github.com/Dylan245-droid/orbit-transfer",
   "bugs": {
-    "url": "https://github.com/REPLACE-ME/orbit-transfer/issues"
+    "url": "https://github.com/Dylan245-droid/orbit-transfer/issues"
   },
   "type": "module",
   "main": "dist/index.js",
